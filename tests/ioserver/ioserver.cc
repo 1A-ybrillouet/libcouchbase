@@ -16,17 +16,30 @@ server_runfunc(void *arg)
 void
 TestServer::run()
 {
+    if (closed) {
+        return;
+    }
+
+    fd_set fds;
+    struct timeval tmout = { 1, 0 };
+
+    FD_ZERO(&fds);
+    FD_SET(*lsn, &fds);
+
     while (!closed) {
         struct sockaddr_in newaddr;
         socklen_t naddr = sizeof(newaddr);
-        int newsock = accept(*lsn, (struct sockaddr *)&newaddr, &naddr);
 
-        if (newsock == -1) {
-            break;
+        if (select(*lsn + 1, &fds, NULL, NULL, &tmout) == 1) {
+            int newsock = accept(*lsn, (struct sockaddr *)&newaddr, &naddr);
+
+            if (newsock == -1) {
+                break;
+            }
+
+            TestConnection *newconn = new TestConnection(this, factory(newsock));
+            startConnection(newconn);
         }
-
-        TestConnection *newconn = new TestConnection(this, factory(newsock));
-        startConnection(newconn);
     }
 }
 
@@ -63,7 +76,10 @@ TestServer::~TestServer()
         delete *iter;
     }
     mutex.unlock();
-    thr->join();
+    // We don't want to explicitly call join() here since that
+    // gets called in the destructor.  This is unncessary
+    // and broken on musl.
+    // thr->join();
     delete thr;
     mutex.close();
     delete lsn;

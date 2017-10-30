@@ -23,21 +23,23 @@
  */
 
 /** Convert seconds to millis */
-#define LCB_S2MS(s) ((lcb_uint32_t)s) * 1000
+#define LCB_S2MS(s) (((lcb_uint32_t)s) * 1000)
 
 /** Convert seconds to microseconds */
-#define LCB_S2US(s) ((lcb_uint32_t)s) * 1000000
+#define LCB_S2US(s) (((lcb_uint32_t)s) * 1000000)
 
 /** Convert seconds to nanoseconds */
-#define LCB_S2NS(s) ((hrtime_t)s) * 1000000000
+#define LCB_S2NS(s) (((hrtime_t)s) * 1000000000)
 
 /** Convert nanoseconds to microseconds */
 #define LCB_NS2US(s) (lcb_uint32_t) ((s) / 1000)
 
-#define LCB_MS2US(s) (s) * 1000
+#define LCB_MS2US(s) ((s) * 1000)
 
 /** Convert microseconds to nanoseconds */
-#define LCB_US2NS(s) ((hrtime_t)s) * 1000
+#define LCB_US2NS(s) (((hrtime_t)s) * 1000)
+/** Convert milliseconds to nanoseconds */
+#define LCB_MS2NS(s) (((hrtime_t)s) * 1000000)
 
 
 #define LCB_DEFAULT_TIMEOUT LCB_MS2US(2500)
@@ -48,9 +50,6 @@
 /** 2 seconds per node */
 #define LCB_DEFAULT_NODECONFIG_TIMEOUT LCB_MS2US(2000)
 
-/** Poll every 10 seconds */
-#define LCB_DEFAULT_CONFIGPOLL_INTERVAL LCB_MS2US(10000)
-
 #define LCB_DEFAULT_VIEW_TIMEOUT LCB_MS2US(75000)
 #define LCB_DEFAULT_N1QL_TIMEOUT LCB_MS2US(75000)
 #define LCB_DEFAULT_DURABILITY_TIMEOUT LCB_MS2US(5000)
@@ -59,8 +58,8 @@
 #define LCB_DEFAULT_CONFIG_MAXIMUM_REDIRECTS 3
 #define LCB_DEFAULT_CONFIG_ERRORS_THRESHOLD 100
 
-/* 10 seconds */
-#define LCB_DEFAULT_CONFIG_ERRORS_DELAY LCB_MS2US(10000)
+/* 10 milliseconds */
+#define LCB_DEFAULT_CONFIG_ERRORS_DELAY LCB_MS2US(10)
 
 /* 1 second */
 #define LCB_DEFAULT_CLCONFIG_GRACE_CYCLE LCB_MS2US(1000)
@@ -84,11 +83,20 @@
 #define LCB_DEFAULT_COMPRESSOPTS LCB_COMPRESS_NONE
 
 #define LCB_DEFAULT_NVM_RETRY_IMM 1
+#define LCB_DEFAULT_RETRY_NMV_INTERVAL LCB_MS2US(100)
+#define LCB_DEFAULT_VB_NOGUESS 1
 #define LCB_DEFAULT_TCP_NODELAY 1
+#define LCB_DEFAULT_SELECT_BUCKET 1
+#define LCB_DEFAULT_TCP_KEEPALIVE 1
+/* 2.5 s */
+#define LCB_DEFAULT_CONFIG_POLL_INTERVAL LCB_MS2US(2500)
+/* 50 ms */
+#define LCB_CONFIG_POLL_INTERVAL_FLOOR LCB_MS2US(50)
 
 #include "config.h"
 #include <libcouchbase/couchbase.h>
 #include <libcouchbase/metrics.h>
+#include "errmap.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -108,6 +116,7 @@ typedef struct lcb_settings_st {
     lcb_U16 iid;
     lcb_U8 compressopts;
     lcb_U8 syncmode;
+    lcb_U32 read_chunk_size;
     lcb_U32 operation_timeout;
     lcb_U32 views_timeout;
     lcb_U32 http_timeout;
@@ -116,7 +125,6 @@ typedef struct lcb_settings_st {
     lcb_U32 durability_interval;
     lcb_U32 config_timeout;
     lcb_U32 config_node_timeout;
-    lcb_U32 config_poll_interval;
     lcb_U32 retry_interval;
     lcb_U32 weird_things_threshold;
     lcb_U32 weird_things_delay;
@@ -130,6 +138,9 @@ typedef struct lcb_settings_st {
     /**For bc_http, the amount of type to keep the stream open, for future
      * updates. */
     lcb_U32 bc_http_stream_time;
+
+    /** Time to wait in between background config polls. 0 disables this */
+    lcb_U32 config_poll_interval;
 
     unsigned bc_http_urltype : 4;
 
@@ -147,10 +158,14 @@ typedef struct lcb_settings_st {
     unsigned keep_guess_vbs : 1;
     unsigned fetch_mutation_tokens : 1;
     unsigned dur_mutation_tokens : 1;
-    unsigned sslopts : 2;
+    unsigned sslopts : 3;
     unsigned ipv6 : 2;
     unsigned tcp_nodelay : 1;
     unsigned readj_ts_wait : 1;
+    unsigned use_errmap : 1;
+    unsigned select_bucket : 1;
+    unsigned tcp_keepalive : 1;
+    unsigned send_hello : 1;
 
     short max_redir;
     unsigned refcount;
@@ -158,16 +173,18 @@ typedef struct lcb_settings_st {
     uint8_t retry[LCB_RETRY_ON_MAX];
     float retry_backoff;
 
-    char *username;
-    char *password;
     char *bucket;
     char *sasl_mech_force;
     char *certpath;
+    lcb_AUTHENTICATOR *auth;
     struct rdb_ALLOCATOR* (*allocator_factory)(void);
     struct lcbio_SSLCTX *ssl_ctx;
     struct lcb_logprocs_st *logger;
     void (*dtorcb)(const void *);
     void *dtorarg;
+    char *client_string;
+    lcb_pERRMAP errmap;
+    lcb_U32 retry_nmv_interval;
     struct lcb_METRICS_st *metrics;
 } lcb_settings;
 
@@ -182,27 +199,21 @@ LCB_INTERNAL_API
 void
 lcb_settings_unref(lcb_settings *);
 
-#define lcb_settings_ref(settings) (settings)->refcount++
+#define lcb_settings_ref(settings) ((void)(settings)->refcount++)
+#define lcb_settings_ref2(settings) ((settings)->refcount++, settings)
 
 /**
  * Metric functionality. Defined in metrics.h, but retains a global-like
  * setting similar to lcb_settings
  */
-lcb_METRICS *
-lcb_metrics_new(void);
-
-void
-lcb_metrics_destroy(lcb_METRICS *metrics);
-
-lcb_SERVERMETRICS *
-lcb_metrics_getserver(lcb_METRICS *metrics,
-    const char *host, const char *port, int create);
-
 void
 lcb_metrics_dumpio(const lcb_IOMETRICS *metrics, FILE *fp);
 
 void
 lcb_metrics_dumpserver(const lcb_SERVERMETRICS *metrics, FILE *fp);
+
+void
+lcb_metrics_reset_pipeline_gauges(lcb_SERVERMETRICS *metrics);
 
 #ifdef __cplusplus
 }

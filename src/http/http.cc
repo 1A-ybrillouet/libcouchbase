@@ -19,9 +19,10 @@
 #include "bucketconfig/clconfig.h"
 #include "http/http.h"
 #include "http/http-priv.h"
-using namespace lcbhtapi;
+#include "auth-priv.h"
+using namespace lcb::http;
 
-#define LOGFMT "<%s:%s>"
+#define LOGFMT "<%s:%s> "
 #define LOGID(req) (req)->host.c_str(), (req)->port.c_str()
 #define LOGARGS(req, lvl) req->instance->settings, "http-io", LCB_LOG_##lvl, __FILE__, __LINE__
 
@@ -43,7 +44,7 @@ Request::decref()
     close_io();
 
     if (parser) {
-        lcbht_free(parser);
+        delete parser;
     }
 
     if (timer) {
@@ -103,7 +104,6 @@ void
 Request::maybe_refresh_config(lcb_error_t err)
 {
     int htstatus_ok;
-    lcbht_RESPONSE *resp;
     if (!parser) {
         return;
     }
@@ -112,25 +112,25 @@ Request::maybe_refresh_config(lcb_error_t err)
         return;
     }
 
-    resp = lcbht_get_response(parser);
-    htstatus_ok = resp->status >= 200 && resp->status < 299;
+    const lcb::htparse::Response& resp = parser->get_cur_response();
+    htstatus_ok = resp.status >= 200 && resp.status < 299;
 
     if (err != LCB_SUCCESS && (err == LCB_ESOCKSHUTDOWN && htstatus_ok) == 0) {
         /* ignore graceful close */
-        lcb_bootstrap_common(instance, LCB_BS_REFRESH_ALWAYS);
+        instance->bootstrap(BS_REFRESH_ALWAYS);
         return;
     }
 
     if (htstatus_ok) {
         return;
     }
-    lcb_bootstrap_common(instance, LCB_BS_REFRESH_ALWAYS);
+    instance->bootstrap(BS_REFRESH_ALWAYS);
 }
 
 void
 Request::init_resp(lcb_RESPHTTP *res)
 {
-    const lcbht_RESPONSE *htres = lcbht_get_response(parser);
+    const lcb::htparse::Response& htres = parser->get_cur_response();
 
     res->cookie = const_cast<void*>(command_cookie);
     res->key = url.c_str() + url_info.field_data[UF_PATH].off;
@@ -139,9 +139,7 @@ Request::init_resp(lcb_RESPHTTP *res)
     if (!response_headers.empty()) {
         res->headers = &response_headers_clist[0];
     }
-    if (htres) {
-        res->htstatus = htres->status;
-    }
+    res->htstatus = htres.status;
 }
 
 void
@@ -227,6 +225,7 @@ Request::submit()
     size_t path_len = url.size() - path_off;
     preamble.insert(preamble.end(),
         url_s + path_off, url_s + path_off + path_len);
+    lcb_log(LOGARGS(this, TRACE), LOGFMT "%s %s. Body=%lu bytes", LOGID(this), method_strings[method], url.c_str(), body.size());
 
     add_to_preamble(" HTTP/1.1\r\n");
 
@@ -237,6 +236,7 @@ Request::submit()
     add_to_preamble(host);
     add_to_preamble(":");
     add_to_preamble(port);
+    add_to_preamble("\r\n");
 
     // Add the rest of the headers
     std::vector<Header>::const_iterator ii = request_headers.begin();
@@ -252,9 +252,9 @@ Request::submit()
         // Only wipe old parser/response information if current I/O request
         // was a success
         if (parser) {
-            lcbht_reset(parser);
+            parser->reset();
         } else {
-            parser = lcbht_new(instance->settings);
+            parser = new lcb::htparse::Parser(instance->settings);
         }
         response_headers.clear();
         response_headers_clist.clear();
@@ -297,26 +297,32 @@ Request::assign_url(const char *base, size_t nbase, const char *path, size_t npa
                 url.append("/");
             }
 
-            lcb_size_t n_added;
-            std::vector<char> encpath;
-            encpath.resize((npath * 3) + 1);
-            char *pp = &encpath[0];
-            lcb_error_t rc = lcb_urlencode_path(path, npath, &pp, &n_added);
-            if (rc != LCB_SUCCESS) {
-                return rc;
+            if (!lcb::strcodecs::urlencode(path, path + npath, url)) {
+                return LCB_INVALID_CHAR;
             }
-            encpath.resize(n_added);
-            url.append(encpath.begin(), encpath.end());
         }
     }
 
+
+    bool redir_checked = false;
+    static const unsigned required_fields =
+            ((1 << UF_HOST) | (1 << UF_PORT) | (1 << UF_PATH));
+
+    GT_REPARSE:
     if (_lcb_http_parser_parse_url(url.c_str(), url.size(), 0, &url_info)) {
         return LCB_EINVAL;
     }
 
-    static const unsigned required_fields =
-            ((1 << UF_HOST) | (1 << UF_PORT) | (1 << UF_PATH));
     if ((url_info.field_set & required_fields) != required_fields) {
+        if (base == NULL && path == NULL && !redir_checked) {
+            redir_checked = true;
+            std::string first_part(htscheme, schemsize);
+            first_part += host;
+            first_part += ':';
+            first_part += port;
+            url = first_part + url;
+            goto GT_REPARSE;
+        }
         return LCB_EINVAL;
     }
 
@@ -333,6 +339,7 @@ Request::redirect()
     if (LCBT_SETTING(instance, max_redir) > -1) {
         if (LCBT_SETTING(instance, max_redir) < ++redircount) {
             finish(LCB_TOO_MANY_REDIRECTS);
+            return;
         }
     }
 
@@ -341,11 +348,30 @@ Request::redirect()
     pending_redirect.clear();
 
     if ((rc = assign_url(NULL, 0, NULL, 0)) != LCB_SUCCESS) {
+        lcb_log(LOGARGS(this, ERR), LOGFMT "Failed to add redirect URL (%s)", LOGID(this), url.c_str());
         finish(rc);
+        return;
     }
 
     if ((rc = submit()) != LCB_SUCCESS) {
         finish(rc);
+    }
+}
+
+static lcbvb_SVCTYPE
+httype2svctype(unsigned httype)
+{
+    switch (httype) {
+    case LCB_HTTP_TYPE_VIEW:
+        return LCBVB_SVCTYPE_VIEWS;
+    case LCB_HTTP_TYPE_N1QL:
+        return LCBVB_SVCTYPE_N1QL;
+    case LCB_HTTP_TYPE_FTS:
+        return LCBVB_SVCTYPE_FTS;
+    case LCB_HTTP_TYPE_CBAS:
+        return LCBVB_SVCTYPE_CBAS;
+    default:
+        return LCBVB_SVCTYPE__MAX;
     }
 }
 
@@ -361,8 +387,7 @@ Request::get_api_node(lcb_error_t &rc)
         return NULL;
     }
 
-    const lcbvb_SVCTYPE svc = reqtype == LCB_HTTP_TYPE_VIEW ?
-            LCBVB_SVCTYPE_VIEWS : LCBVB_SVCTYPE_N1QL;
+    const lcbvb_SVCTYPE svc = httype2svctype(reqtype);
     const lcbvb_SVCMODE mode = LCBT_SETTING(instance, sslopts) ?
             LCBVB_SVCMODE_SSL : LCBVB_SVCMODE_PLAIN;
 
@@ -381,6 +406,10 @@ Request::get_api_node(lcb_error_t &rc)
     }
     used_nodes[ix] = 1;
     return lcbvb_get_resturl(vbc, ix, svc, mode);
+}
+
+static bool is_nonempty(const char *s) {
+    return s != NULL && *s != '\0';
 }
 
 lcb_error_t
@@ -405,9 +434,17 @@ Request::setup_inputs(const lcb_CMDHTTP *cmd)
         if (cmd->host) {
             return LCB_EINVAL;
         }
-        if (username == NULL && password == NULL) {
-            username = LCBT_SETTING(instance, username);
-            password = LCBT_SETTING(instance, password);
+        if (cmd->cmdflags & LCB_CMDHTTP_F_NOUPASS) {
+            username = password = NULL;
+        } else if (username == NULL && password == NULL) {
+            const Authenticator& auth = *LCBT_SETTING(instance, auth);
+            if (reqtype == LCB_HTTP_TYPE_MANAGEMENT) {
+                username = auth.username().c_str();
+                password = auth.password().c_str();
+            } else {
+                username = auth.username_for(LCBT_SETTING(instance, bucket)).c_str();
+                password = auth.password_for(LCBT_SETTING(instance, bucket)).c_str();
+            }
         }
 
         base = get_api_node(rc);
@@ -431,13 +468,18 @@ Request::setup_inputs(const lcb_CMDHTTP *cmd)
         return rc;
     }
 
-    add_header("User-Agent", "libcouchbase/"LCB_VERSION_STRING);
-    if (instance->http_sockpool->maxidle == 0 || !is_data_request()) {
+    std::string ua("libcouchbase/" LCB_VERSION_STRING);
+    if (instance->settings->client_string) {
+        ua.append(" ").append(instance->settings->client_string);
+    }
+    add_header("User-Agent", ua);
+
+    if (instance->http_sockpool->get_options().maxidle == 0 || !is_data_request()) {
         add_header("Connection", "close");
     }
 
     add_header("Accept", "application/json");
-    if (password && username) {
+    if (is_nonempty(password) && is_nonempty(username)) {
         char auth[256];
         std::string upassbuf;
         upassbuf.append(username).append(":").append(password);
@@ -490,6 +532,7 @@ Request::timeout() const
     }
     switch (reqtype) {
     case LCB_HTTP_TYPE_N1QL:
+    case LCB_HTTP_TYPE_FTS:
         return LCBT_SETTING(instance, n1ql_timeout);
     case LCB_HTTP_TYPE_VIEW:
         return LCBT_SETTING(instance, views_timeout);
@@ -507,6 +550,7 @@ Request::create(lcb_t instance,
         *rc = LCB_CLIENT_ENOMEM;
         return NULL;
     }
+    req->start = gethrtime();
 
     *rc = req->setup_inputs(cmd);
     if (*rc != LCB_SUCCESS) {
@@ -579,23 +623,6 @@ Request::cancel()
     }
     status |= CBINVOKED;
     finish(LCB_SUCCESS);
-}
-
-// Wrappers
-void lcb_htreq_setcb(lcb_http_request_t req, lcb_RESPCALLBACK callback) {
-    req->callback = callback;
-}
-void lcb_htreq_block_callback(lcb_http_request_t req) {
-    req->block_callback();
-}
-void lcb_htreq_pause(lcb_http_request_t req) {
-    req->pause();
-}
-void lcb_htreq_resume(lcb_http_request_t req) {
-    req->resume();
-}
-void lcb_htreq_finish(lcb_t, lcb_http_request_t req, lcb_error_t rc) {
-    req->finish(rc);
 }
 
 LIBCOUCHBASE_API

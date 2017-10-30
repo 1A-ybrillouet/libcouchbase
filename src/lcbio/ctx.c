@@ -154,7 +154,7 @@ lcbio_ctx_close_ex(lcbio_CTX *ctx, lcbio_CTXCLOSE_cb cb, void *arg,
     }
 
     oldrc = ctx->sock->refcount;
-    lcb_log(LOGARGS(ctx, DEBUG), CTX_LOGFMT "Destroying. PND=%d,ENT=%d,SORC=%d", CTX_LOGID(ctx), (int)ctx->npending, (int)ctx->entered, oldrc);
+    lcb_log(LOGARGS(ctx, DEBUG), CTX_LOGFMT "Destroying context. Pending Writes=%d, Entered=%s, Socket Refcount=%d", CTX_LOGID(ctx), (int)ctx->npending, (int)ctx->entered ? "true": "false", oldrc);
 
     if (cb) {
         int reusable =
@@ -551,15 +551,19 @@ Cw_ex_handler(lcb_sockdata_t *sd, int status, void *wdata)
 {
     lcbio_CTX *ctx = ((lcbio_SOCKET *)sd->lcbconn)->ctx;
     unsigned nflushed = (uintptr_t)wdata;
+    ctx->npending--;
 
     CTX_INCR_METRIC(ctx, bytes_sent, nflushed);
+    ctx->entered = 1;
     ctx->procs.cb_flush_done(ctx, nflushed, nflushed);
+    ctx->entered = 0;
 
-    ctx->npending--;
-    assert(ctx->state == ES_ACTIVE);
-
-    if (status != 0) {
-        send_io_error(ctx, LCBIO_IOERR);
+    if (ctx->state == ES_ACTIVE && status) {
+        CTX_INCR_METRIC(ctx, io_error, 1);
+        invoke_entered_errcb(ctx, convert_lcberr(ctx, LCBIO_IOERR));
+    }
+    if (ctx->state != ES_ACTIVE && !ctx->npending) {
+        free_ctx(ctx);
     }
 }
 

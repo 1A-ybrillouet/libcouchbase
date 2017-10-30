@@ -1,5 +1,23 @@
+/* -*- Mode: C; tab-width: 4; c-basic-offset: 4; indent-tabs-mode: nil -*- */
+/*
+ *     Copyright 2015-2017 Couchbase, Inc.
+ *
+ *   Licensed under the Apache License, Version 2.0 (the "License");
+ *   you may not use this file except in compliance with the License.
+ *   You may obtain a copy of the License at
+ *
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *   Unless required by applicable law or agreed to in writing, software
+ *   distributed under the License is distributed on an "AS IS" BASIS,
+ *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *   See the License for the specific language governing permissions and
+ *   limitations under the License.
+ */
+
 #include <libcouchbase/couchbase.h>
 #include <libcouchbase/n1ql.h>
+#include <libcouchbase/vbucket.h>
 #include "contrib/lcb-jsoncpp/lcb-jsoncpp.h"
 #include <string>
 
@@ -84,17 +102,95 @@ lcb_n1p_posparam(lcb_N1QLPARAMS *params, const char *value, size_t nvalue)
 }
 
 lcb_error_t
-lcb_n1p_mutation_token(lcb_N1QLPARAMS *params, const lcb_MUTATION_TOKEN *sv)
+lcb_n1p_readonly(lcb_N1QLPARAMS *params, int readonly)
 {
-    Json::Value sv_json = params->root["scan_vector"];
-    params->root["scan_consistency"] = "at_plus";
+    params->root["readonly"] = readonly ? true : false;
+    return LCB_SUCCESS;
+}
 
+lcb_error_t
+lcb_n1p_scancap(lcb_N1QLPARAMS *params, int scancap)
+{
+    params->root["scan_cap"] = Json::valueToString(scancap);
+    return LCB_SUCCESS;
+}
+
+lcb_error_t
+lcb_n1p_pipelinecap(lcb_N1QLPARAMS *params, int pipelinecap)
+{
+    params->root["pipeline_cap"] = Json::valueToString(pipelinecap);
+    return LCB_SUCCESS;
+}
+
+lcb_error_t
+lcb_n1p_pipelinebatch(lcb_N1QLPARAMS *params, int pipelinebatch)
+{
+    params->root["pipeline_batch"] = Json::valueToString(pipelinebatch);
+    return LCB_SUCCESS;
+}
+
+static void
+encode_mutation_token(Json::Value& sparse, const lcb_MUTATION_TOKEN *sv)
+{
     char buf[64] = { 0 };
     sprintf(buf, "%u", sv->vbid_);
-    Json::Value& cur_sv = params->root[buf];
-    sprintf(buf, "%llu", sv->uuid_);
-    cur_sv["guard"] = buf;
-    cur_sv["value"] = static_cast<Json::UInt64>(sv->seqno_);
+    Json::Value& cur_sv = sparse[buf];
+
+    cur_sv[0] = static_cast<Json::UInt64>(sv->seqno_);
+    sprintf(buf, "%llu", (unsigned long long)sv->uuid_);
+    cur_sv[1] = buf;
+}
+
+lcb_error_t
+lcb_n1p_setconsistent_token(lcb_N1QLPARAMS *params,
+    const char *keyspace, const lcb_MUTATION_TOKEN *sv)
+{
+    if (!LCB_MUTATION_TOKEN_ISVALID(sv)) {
+        return LCB_EINVAL;
+    }
+
+    params->root["scan_consistency"] = "at_plus";
+    encode_mutation_token(params->root["scan_vectors"][keyspace], sv);
+    return LCB_SUCCESS;
+}
+
+lcb_error_t
+lcb_n1p_setconsistent_handle(lcb_N1QLPARAMS *params, lcb_t instance)
+{
+    lcbvb_CONFIG *vbc;
+    lcb_error_t rc = lcb_cntl(instance, LCB_CNTL_GET, LCB_CNTL_VBCONFIG, &vbc);
+    if (rc != LCB_SUCCESS) {
+        return rc;
+    }
+
+    const char *bucketname;
+    rc = lcb_cntl(instance, LCB_CNTL_GET, LCB_CNTL_BUCKETNAME, &bucketname);
+    if (rc != LCB_SUCCESS) {
+        return rc;
+    }
+
+    Json::Value* sv_json = NULL;
+
+    size_t vbmax = vbc->nvb;
+    for (size_t ii = 0; ii < vbmax; ++ii) {
+        lcb_KEYBUF kb;
+        kb.type = LCB_KV_VBID;
+        kb.contig.nbytes = ii;
+        kb.contig.bytes = NULL;
+        const lcb_MUTATION_TOKEN *mt = lcb_get_mutation_token(instance, &kb, &rc);
+        if (rc == LCB_SUCCESS && mt != NULL) {
+            if (sv_json == NULL) {
+                sv_json = &params->root["scan_vectors"][bucketname];
+                params->root["scan_consistency"] = "at_plus";
+            }
+            encode_mutation_token(*sv_json, mt);
+        }
+    }
+
+    if (!sv_json) {
+        return LCB_KEY_ENOENT;
+    }
+
     return LCB_SUCCESS;
 }
 

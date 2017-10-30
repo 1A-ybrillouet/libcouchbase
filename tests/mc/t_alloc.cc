@@ -136,7 +136,6 @@ TEST_F(McAlloc, testKeyAlloc)
     mcreq_release_packet(pipeline, packet);
 }
 
-// Check that our value allocation stuff works. This only tests copied values
 TEST_F(McAlloc, testValueAlloc)
 {
     CQWrap q;
@@ -202,17 +201,38 @@ TEST_F(McAlloc, testValueAlloc)
     ASSERT_EQ(5, packet->u_value.multi.total_length);
     mcreq_wipe_packet(pipeline, packet);
     mcreq_release_packet(pipeline, packet);
+
+    iov[0].iov_base = (void *)value;
+    iov[0].iov_len = 3;
+    iov[1].iov_base = (void *)(value + 3);
+    iov[1].iov_len = 2;
+    vreq.u_buf.multi.iov = (lcb_IOV *)iov;
+    vreq.u_buf.multi.niov = 2;
+    vreq.u_buf.multi.total_length = 0;
+
+    vreq.vtype = LCB_KV_IOVCOPY;
+    ret = mcreq_basic_packet(&q, &cmd, &hdr, 0, &packet, &pipeline, 0);
+    ASSERT_EQ(LCB_SUCCESS, ret);
+
+    ret = mcreq_reserve_value(pipeline, packet, &vreq);
+    ASSERT_EQ(LCB_SUCCESS, ret);
+
+    ASSERT_EQ(MCREQ_F_HASVALUE, packet->flags);
+    ASSERT_EQ(0, memcmp(SPAN_BUFFER(&packet->u_value.single), value, 5));
+    mcreq_wipe_packet(pipeline, packet);
+    mcreq_release_packet(pipeline, packet);
 }
 
-struct ExtraCookie {
-    mc_REQDATAEX base;
+struct ExtraCookie : mc_REQDATAEX {
     int remaining;
+    ExtraCookie(const mc_REQDATAPROCS& procs_)
+        : mc_REQDATAEX(NULL, procs_, 0), remaining(0) {
+    }
 };
 
 extern "C" {
 static void pkt_dtor(mc_PACKET *pkt) {
-    mc_REQDATAEX *rd = pkt->u_rdata.exdata;
-    ExtraCookie *ec = (ExtraCookie *)rd;
+    ExtraCookie *ec = static_cast<ExtraCookie*>(pkt->u_rdata.exdata);
     ec->remaining--;
 }
 }
@@ -221,17 +241,16 @@ TEST_F(McAlloc, testRdataExDtor)
 {
     CQWrap q;
     lcb_CMDBASE basecmd;
-    ExtraCookie ec;
+    const static mc_REQDATAPROCS procs = { NULL, pkt_dtor };
     protocol_binary_request_header hdr;
 
     memset(&hdr, 0, sizeof hdr);
     memset(&basecmd, 0, sizeof basecmd);
-    memset(&ec, 0, sizeof ec);
 
-    mc_REQDATAPROCS procs = { NULL, pkt_dtor };
-    ec.base.procs = &procs;
     basecmd.key.contig.bytes = "foo";
     basecmd.key.contig.nbytes = 3;
+
+    ExtraCookie ec(procs);
 
     mcreq_sched_enter(&q);
     for (unsigned ii = 0; ii < 5; ii++) {
@@ -241,7 +260,7 @@ TEST_F(McAlloc, testRdataExDtor)
         err = mcreq_basic_packet(&q, &basecmd, &hdr, 0, &pkt, &pl, 0);
         ASSERT_EQ(LCB_SUCCESS, err);
         pkt->flags |= MCREQ_F_REQEXT;
-        pkt->u_rdata.exdata = &ec.base;
+        pkt->u_rdata.exdata = &ec;
         mcreq_sched_add(pl, pkt);
         ec.remaining++;
     }

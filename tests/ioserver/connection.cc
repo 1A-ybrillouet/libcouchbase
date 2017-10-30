@@ -37,7 +37,7 @@ TestConnection::sendData()
         void *outbuf;
 #endif
         size_t n = f_send->getBuf((void**)&outbuf);
-        size_t nw = datasock->send(outbuf, n);
+        ssize_t nw = datasock->send(outbuf, n);
         if (nw < 0) {
             f_send->bail();
         } else {
@@ -152,7 +152,10 @@ TestConnection::~TestConnection()
     ctlfd_user->close();
     ctlfd_lsn->close();
     datasock->close();
-    thr->join();
+    // We don't want to explicitly call join() here since that
+    // gets called in the destructor.  This is unncessary
+    // and broken on musl.
+    // thr->join();
     delete thr;
     mutex.close();
     initcond.close();

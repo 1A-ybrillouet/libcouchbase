@@ -26,7 +26,6 @@
 #include "json-inl.h"
 #include "hash.h"
 #include "crc32.h"
-#include "simplestring.h"
 
 #define STRINGIFY_(X) #X
 #define STRINGIFY(X) STRINGIFY_(X)
@@ -275,7 +274,7 @@ static int continuum_item_cmp(const void *t1, const void *t2)
 }
 
 static int
-parse_ketama(lcbvb_CONFIG *cfg)
+update_ketama(lcbvb_CONFIG *cfg)
 {
     char host[MAX_AUTHORITY_SIZE+10] = "";
     int nhost;
@@ -327,8 +326,10 @@ extract_services(lcbvb_CONFIG *cfg, cJSON *jsvc, lcbvb_SERVICES *svc, int is_ssl
     EXTRACT_SERVICE("mgmt", mgmt);
     EXTRACT_SERVICE("capi", views);
     EXTRACT_SERVICE("n1ql", n1ql);
+    EXTRACT_SERVICE("fts", fts);
     EXTRACT_SERVICE("indexAdmin", ixadmin);
     EXTRACT_SERVICE("indexScan", ixquery);
+    EXTRACT_SERVICE("cbas", cbas);
 
     #undef EXTRACT_SERVICE
 
@@ -356,6 +357,12 @@ build_server_strings(lcbvb_CONFIG *cfg, lcbvb_SERVER *server)
     }
     if (server->querypath == NULL && server->svc.n1ql) {
         server->querypath = strdup("/query/service");
+    }
+    if (server->ftspath == NULL && server->svc.fts) {
+        server->ftspath = strdup("/");
+    }
+    if (server->cbaspath == NULL && server->svc.cbas) {
+        server->cbaspath = strdup("/query/service");
     }
     return 1;
 }
@@ -535,6 +542,36 @@ lcbvb_load_json(lcbvb_CONFIG *cfg, const char *data)
         cfg->revid = -1;
     }
 
+    cfg->caps = 0;
+    {
+        cJSON *jcaps = NULL;
+        if (get_jarray(cj, "bucketCapabilities", &jcaps)) {
+            unsigned ncaps = cJSON_GetArraySize(jcaps);
+            for (ii = 0; ii < ncaps; ii++) {
+                cJSON *jcap = cJSON_GetArrayItem(jcaps, ii);
+                if (jcap || jcap->type == cJSON_String) {
+                    if (strcmp(jcap->valuestring, "xattr") == 0) {
+                        cfg->caps |= LCBVB_CAP_XATTR;
+                    } else if (strcmp(jcap->valuestring, "dcp") == 0) {
+                        cfg->caps |= LCBVB_CAP_DCP;
+                    } else if (strcmp(jcap->valuestring, "cbhello") == 0) {
+                        cfg->caps |= LCBVB_CAP_CBHELLO;
+                    } else if (strcmp(jcap->valuestring, "touch") == 0) {
+                        cfg->caps |= LCBVB_CAP_TOUCH;
+                    } else if (strcmp(jcap->valuestring, "couchapi") == 0) {
+                        cfg->caps |= LCBVB_CAP_COUCHAPI;
+                    } else if (strcmp(jcap->valuestring, "cccp") == 0) {
+                        cfg->caps |= LCBVB_CAP_CCCP;
+                    } else if (strcmp(jcap->valuestring, "xdcrCheckpointing") == 0) {
+                        cfg->caps |= LCBVB_CAP_XDCR_CHECKPOINTING;
+                    } else if (strcmp(jcap->valuestring, "nodesExt") == 0) {
+                        cfg->caps |= LCBVB_CAP_NODES_EXT;
+                    }
+                }
+            }
+        }
+    }
+
     /** Get the number of nodes. This traverses the list. Yuck */
     cfg->nsrv = cJSON_GetArraySize(jnodes);
 
@@ -571,8 +608,12 @@ lcbvb_load_json(lcbvb_CONFIG *cfg, const char *data)
             goto GT_ERROR;
         }
     } else {
-        if (!parse_ketama(cfg)) {
-            SET_ERRSTR(cfg, "Failed to establish ketama continuums");
+        /* If there is no $HOST then we can update the ketama config, otherwise
+         * we must wait for the hostname to be replaced! */
+        if (strstr(data, "$HOST") == NULL) {
+            if (!update_ketama(cfg)) {
+                SET_ERRSTR(cfg, "Failed to establish ketama continuums");
+            }
         }
     }
     cfg->servers = realloc(cfg->servers, sizeof(*cfg->servers) * cfg->nsrv);
@@ -638,6 +679,9 @@ lcbvb_replace_host(lcbvb_CONFIG *cfg, const char *hoststr)
         /* reassign authority */
         srv->authority = srv->svc.hoststrs[LCBVB_SVCTYPE_DATA];
     }
+    if (cfg->dtype == LCBVB_DIST_KETAMA) {
+        update_ketama(cfg);
+    }
 }
 
 lcbvb_CONFIG *
@@ -669,6 +713,8 @@ free_service_strs(lcbvb_SERVICES *svc)
     }
     free(svc->views_base_);
     free(svc->query_base_);
+    free(svc->fts_base_);
+    free(svc->cbas_base_);
 }
 
 void
@@ -680,6 +726,8 @@ lcbvb_destroy(lcbvb_CONFIG *conf)
         free(srv->hostname);
         free(srv->viewpath);
         free(srv->querypath);
+        free(srv->ftspath);
+        free(srv->cbaspath);
         free_service_strs(&srv->svc);
         free_service_strs(&srv->svc_ssl);
     }
@@ -886,7 +934,7 @@ lcbvb_vbreplica(lcbvb_CONFIG *cfg, int vbid, unsigned ix)
  *    your request. Exit. Otherwise propagate error to back to app
  */
 int
-lcbvb_nmv_remap(lcbvb_CONFIG *cfg, int vbid, int bad)
+lcbvb_nmv_remap_ex(lcbvb_CONFIG *cfg, int vbid, int bad, int heuristic)
 {
     int cur = cfg->vbuckets[vbid].servers[0];
     int rv = cur;
@@ -900,16 +948,13 @@ lcbvb_nmv_remap(lcbvb_CONFIG *cfg, int vbid, int bad)
      * and update that information in the current table. We also need to Update the
      * replica information for that vbucket */
 
-    if (cfg->ffvbuckets) {
-        rv = cfg->vbuckets[vbid].servers[0] = cfg->ffvbuckets[vbid].servers[0];
-        for (ii = 0; ii < cfg->nrepl; ii++) {
-            cfg->vbuckets[vbid].servers[ii+1] = cfg->ffvbuckets[vbid].servers[ii+1];
-        }
-        cur = rv;
+    if (cfg->ffvbuckets &&
+            (rv = cfg->ffvbuckets[vbid].servers[0]) != bad && rv > -1) {
+        memcpy(&cfg->vbuckets[vbid], &cfg->ffvbuckets[vbid], sizeof (lcbvb_VBUCKET));
     }
 
     /* this path is usually only followed if fvbuckets is not present */
-    if (cur == bad) {
+    if (heuristic && cur == bad) {
         int validrv = -1;
         for (ii = 0; ii < cfg->ndatasrv; ii++) {
             rv = (rv + 1) % cfg->ndatasrv;
@@ -1104,6 +1149,10 @@ lcbvb_get_port(lcbvb_CONFIG *cfg,
         return svc->ixquery;
     } else if (type == LCBVB_SVCTYPE_N1QL) {
         return svc->n1ql;
+    } else if (type == LCBVB_SVCTYPE_FTS) {
+        return svc->fts;
+    } else if (type == LCBVB_SVCTYPE_CBAS) {
+        return svc->cbas;
     } else {
         return 0;
     }
@@ -1178,7 +1227,9 @@ lcbvb_get_randhost_ex(const lcbvb_CONFIG *cfg,
                 (type == LCBVB_SVCTYPE_IXQUERY && svcs->ixquery) ||
                 (type == LCBVB_SVCTYPE_MGMT && svcs->mgmt) ||
                 (type == LCBVB_SVCTYPE_N1QL && svcs->n1ql) ||
-                (type == LCBVB_SVCTYPE_VIEWS && svcs->views);
+                (type == LCBVB_SVCTYPE_FTS && svcs->fts) ||
+                (type == LCBVB_SVCTYPE_VIEWS && svcs->views) ||
+                (type == LCBVB_SVCTYPE_CBAS && svcs->cbas);
 
         if (has_svc) {
             cfg->randbuf[oix++] = (int)nn;
@@ -1212,9 +1263,9 @@ lcbvb_get_resturl(lcbvb_CONFIG *cfg, unsigned ix,
     char buf[4096];
     const char *prefix;
     const char *path;
-    int is_views = svc == LCBVB_SVCTYPE_VIEWS;
 
     lcbvb_SERVER *srv;
+    lcbvb_SERVICES *svcs;
     unsigned port;
     port = lcbvb_get_port(cfg, ix, svc, mode);
     if (!port) {
@@ -1222,26 +1273,38 @@ lcbvb_get_resturl(lcbvb_CONFIG *cfg, unsigned ix,
     }
 
     srv = cfg->servers + ix;
-    if (is_views && (path = srv->viewpath) == NULL) {
-        return NULL;
-    } else if (!is_views && (path = srv->querypath) == NULL) {
-        return NULL;
-    }
-
     if (mode == LCBVB_SVCMODE_PLAIN) {
         prefix = "http";
-        strp = is_views ? &srv->svc.views_base_ : &srv->svc.query_base_;
+        svcs = &srv->svc;
     } else {
         prefix = "https";
-        strp = is_views ? &srv->svc_ssl.views_base_ : &srv->svc_ssl.query_base_;
+        svcs = &srv->svc_ssl;
     }
 
-    if (*strp) {
-        return *strp;
+    if (svc == LCBVB_SVCTYPE_VIEWS) {
+        path = srv->viewpath;
+        strp = &svcs->views_base_;
+    } else if (svc == LCBVB_SVCTYPE_N1QL) {
+        path = srv->querypath;
+        strp = &svcs->query_base_;
+    } else if (svc == LCBVB_SVCTYPE_FTS) {
+        path = srv->ftspath;
+        strp = &svcs->fts_base_;
+    } else if (svc == LCBVB_SVCTYPE_CBAS) {
+        path = srv->cbaspath;
+        strp = &svcs->cbas_base_;
+    } else {
+        /* Unknown service! */
+        return NULL;
     }
 
-    sprintf(buf, "%s://%s:%d%s", prefix, srv->hostname, port, path);
-    *strp = strdup(buf);
+    if (path == NULL) {
+        return NULL;
+    } else if (!*strp) {
+        sprintf(buf, "%s://%s:%d%s", prefix, srv->hostname, port, path);
+        *strp = strdup(buf);
+    }
+
     return *strp;
 }
 
@@ -1285,6 +1348,12 @@ copy_service(const char *hostname,
     }
     if (src->query_base_) {
         dst->query_base_ = strdup(src->query_base_);
+    }
+    if (src->fts_base_) {
+        dst->fts_base_ = strdup(src->fts_base_);
+    }
+    if (src->cbas_base_) {
+        dst->cbas_base_ = strdup(src->cbas_base_);
     }
     if (dst->data) {
         sprintf(buf, "%s:%d", hostname, dst->data);
@@ -1342,15 +1411,12 @@ lcbvb_genconfig_ex(lcbvb_CONFIG *vb,
         }
     }
 
-    if (!vb->ndatasrv) {
-        vb->errstr = "No data servers in list";
-        return -1;
-    }
-
-    vb->vbuckets = malloc(vb->nvb * sizeof(*vb->vbuckets));
-    if (!vb->vbuckets) {
-        vb->errstr = "Couldn't allocate vbucket array";
-        return -1;
+    if (vb->nvb) {
+        vb->vbuckets = malloc(vb->nvb * sizeof(*vb->vbuckets));
+        if (!vb->vbuckets) {
+            vb->errstr = "Couldn't allocate vbucket array";
+            return -1;
+        }
     }
 
     for (ii = 0; ii < vb->nvb; ii++) {
@@ -1376,6 +1442,12 @@ lcbvb_genconfig_ex(lcbvb_CONFIG *vb,
         }
         if (src->querypath) {
             dst->querypath = strdup(src->querypath);
+        }
+        if (src->ftspath) {
+            dst->ftspath = strdup(src->ftspath);
+        }
+        if (src->cbaspath) {
+            dst->cbaspath = strdup(src->cbaspath);
         }
 
         copy_service(src->hostname, &src->svc, &dst->svc);
@@ -1417,6 +1489,25 @@ lcbvb_genconfig(lcbvb_CONFIG *vb,
 }
 
 void
+lcbvb_genffmap(lcbvb_CONFIG *cfg)
+{
+    size_t ii;
+    assert(cfg->nrepl);
+    if (cfg->ffvbuckets) {
+        free(cfg->ffvbuckets);
+    }
+    cfg->ffvbuckets = calloc(cfg->nvb, sizeof *cfg->ffvbuckets);
+    for (ii = 0; ii < cfg->nvb; ++ii) {
+        size_t jj;
+        lcbvb_VBUCKET *vb = cfg->ffvbuckets + ii;
+        memcpy(vb, cfg->vbuckets + ii, sizeof *vb);
+        for (jj = 0; jj < cfg->ndatasrv; ++jj) {
+            vb->servers[jj] = (vb->servers[jj] + 1) % cfg->ndatasrv;
+        }
+    }
+}
+
+void
 lcbvb_make_ketama(lcbvb_CONFIG *vb)
 {
     if (vb->dtype == LCBVB_DIST_KETAMA) {
@@ -1425,7 +1516,7 @@ lcbvb_make_ketama(lcbvb_CONFIG *vb)
     vb->dtype = LCBVB_DIST_KETAMA;
     vb->nrepl = 0;
     vb->nvb = 0;
-    parse_ketama(vb);
+    update_ketama(vb);
 }
 
 

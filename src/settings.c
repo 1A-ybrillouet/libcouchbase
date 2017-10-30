@@ -26,7 +26,6 @@ void lcb_default_settings(lcb_settings *settings)
     settings->operation_timeout = LCB_DEFAULT_TIMEOUT;
     settings->config_timeout = LCB_DEFAULT_CONFIGURATION_TIMEOUT;
     settings->config_node_timeout = LCB_DEFAULT_NODECONFIG_TIMEOUT;
-    settings->config_poll_interval = LCB_DEFAULT_CONFIGPOLL_INTERVAL;
     settings->views_timeout = LCB_DEFAULT_VIEW_TIMEOUT;
     settings->n1ql_timeout = LCB_DEFAULT_N1QL_TIMEOUT;
     settings->durability_timeout = LCB_DEFAULT_DURABILITY_TIMEOUT;
@@ -56,6 +55,13 @@ void lcb_default_settings(lcb_settings *settings)
     settings->dur_mutation_tokens = 1;
     settings->nmv_retry_imm = LCB_DEFAULT_NVM_RETRY_IMM;
     settings->tcp_nodelay = LCB_DEFAULT_TCP_NODELAY;
+    settings->retry_nmv_interval = LCB_DEFAULT_RETRY_NMV_INTERVAL;
+    settings->vb_noguess = LCB_DEFAULT_VB_NOGUESS;
+    settings->select_bucket = LCB_DEFAULT_SELECT_BUCKET;
+    settings->tcp_keepalive = LCB_DEFAULT_TCP_KEEPALIVE;
+    settings->send_hello = 1;
+    settings->config_poll_interval = LCB_DEFAULT_CONFIG_POLL_INTERVAL;
+    settings->use_errmap = 1;
 }
 
 LCB_INTERNAL_API
@@ -65,6 +71,8 @@ lcb_settings_new(void)
     lcb_settings *settings = calloc(1, sizeof(*settings));
     lcb_default_settings(settings);
     settings->refcount = 1;
+    settings->auth = lcbauth_new();
+    settings->errmap = lcb_errmap_new();
     return settings;
 }
 
@@ -75,11 +83,14 @@ lcb_settings_unref(lcb_settings *settings)
     if (--settings->refcount) {
         return;
     }
-    free(settings->username);
-    free(settings->password);
     free(settings->bucket);
     free(settings->sasl_mech_force);
     free(settings->certpath);
+    free(settings->client_string);
+
+    lcbauth_unref(settings->auth);
+    lcb_errmap_free(settings->errmap);
+
     if (settings->ssl_ctx) {
         lcbio_ssl_free(settings->ssl_ctx);
     }

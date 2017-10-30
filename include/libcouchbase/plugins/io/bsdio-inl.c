@@ -284,7 +284,7 @@ cntl_getset_impl(lcb_io_opt_t io, lcb_socket_t sock, int mode, int oslevel,
     #ifndef _WIN32
     socklen_t dummy = optsize;
     #else
-    int dummy = optsize;
+    char dummy = optsize;
     #endif
 
     if (mode == LCB_IO_CNTL_GET) {
@@ -309,14 +309,13 @@ cntl_getset_impl(lcb_io_opt_t io, lcb_socket_t sock, int mode, int oslevel,
 static int
 cntl_impl(lcb_io_opt_t io, lcb_socket_t sock, int mode, int option, void *arg)
 {
-    #define BSDIO_INL_GETSET_CTL(lvl, name) { \
-        int rv; \
-        if (mode == LCB_)
-
     switch (option) {
     case LCB_IO_CNTL_TCP_NODELAY:
         return cntl_getset_impl(io,
             sock, mode, IPPROTO_TCP, TCP_NODELAY, sizeof(int), arg);
+    case LCB_IO_CNTL_TCP_KEEPALIVE:
+        return cntl_getset_impl(io,
+            sock, mode, SOL_SOCKET, SO_KEEPALIVE, sizeof(int), arg);
     default:
         LCB_IOPS_ERRNO(io) = ENOTSUP;
         return -1;

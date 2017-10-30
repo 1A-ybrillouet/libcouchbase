@@ -127,6 +127,7 @@ iotssl_destroy_common(lcbio_XSSL *xs)
     lcbio_table_unref(xs->orig);
 }
 
+#if LCB_CAN_OPTIMIZE_SSL_BIO
 void
 iotssl_bm_reserve(BUF_MEM *bm)
 {
@@ -139,6 +140,7 @@ iotssl_bm_reserve(BUF_MEM *bm)
     }
     bm->length = oldlen;
 }
+#endif
 
 void
 iotssl_log_errors(lcbio_XSSL *xs)
@@ -156,7 +158,9 @@ iotssl_log_errors(lcbio_XSSL *xs)
         if (ERR_GET_LIB(curerr) == ERR_LIB_SSL) {
             switch (ERR_GET_REASON(curerr)) {
             case SSL_R_CERTIFICATE_VERIFY_FAILED:
+#ifdef SSL_R_MISSING_VERIFY_MESSAGE
             case SSL_R_MISSING_VERIFY_MESSAGE:
+#endif
                 xs->errcode = LCB_SSL_CANTVERIFY;
                 break;
 
@@ -273,6 +277,8 @@ lcbio_ssl_new(const char *cafile, int noverify, lcb_error_t *errp,
         goto GT_ERR;
 
     }
+    SSL_CTX_set_cipher_list(ret->ctx, "DHE-RSA-AES256-SHA:DHE-DSS-AES256-SHA:AES256-SHA:EDH-RSA-DES-CBC3-SHA:EDH-DSS-DES-CBC3-SHA:DES-CBC3-SHA:DES-CBC3-MD5:DHE-RSA-AES128-SHA:DHE-DSS-AES128-SHA:AES128-SHA:DHE-RSA-SEED-SHA:DHE-DSS-SEED-SHA:SEED-SHA:RC2-CBC-MD5:RC4-SHA:RC4-MD5:RC4-MD5:EDH-RSA-DES-CBC-SHA:EDH-DSS-DES-CBC-SHA:DES-CBC-SHA:DES-CBC-MD5:EXP-EDH-RSA-DES-CBC-SHA:EXP-EDH-DSS-DES-CBC-SHA:EXP-DES-CBC-SHA:EXP-RC2-CBC-MD5:EXP-RC2-CBC-MD5:EXP-RC4-MD5:EXP-RC4-MD5");
+//    SSL_CTX_set_cipher_list(ret->ctx, "!NULL");
 
     if (cafile) {
         if (!SSL_CTX_load_verify_locations(ret->ctx, cafile, NULL)) {
@@ -424,6 +430,7 @@ ossl_init_locks(void)
     for (ii = 0; ii < nlocks; ii++) {
         ossl_lock_init(ossl_locks + ii);
     }
+    /* TODO: locking API has been removed in OpenSSL 1.1 */
     CRYPTO_set_locking_callback(ossl_lockfn);
 }
 

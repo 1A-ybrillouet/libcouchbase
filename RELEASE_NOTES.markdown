@@ -1,5 +1,740 @@
 # Release Notes
 
+## 2.8.2 (October 17 2017)
+
+* [CCBC-833](https://issues.couchbase.com/browse/CCBC-833), [CCBC-834](https://issues.couchbase.com/browse/CCBC-834):
+  Update real cluster integration in the test suite.
+
+* [CCBC-860](https://issues.couchbase.com/browse/CCBC-860): cbc-connstr: Do not zero out C++ instances.
+
+* [CCBC-859](https://issues.couchbase.com/browse/CCBC-859): Fix libm shared object detection on Debian 9.
+
+* Bugs reported by [clang analyzer](http://clang-analyzer.llvm.org/):
+
+  * [CCBC-858](https://issues.couchbase.com/browse/CCBC-858): Fix memory leak for compressed packet.
+  * [CCBC-857](https://issues.couchbase.com/browse/CCBC-857): Fix possible NULL pointer dereference in `mcreq_reserve_key`.
+  * [CCBC-856](https://issues.couchbase.com/browse/CCBC-856): Initialize response struct in `H_config`.
+  * [CCBC-855](https://issues.couchbase.com/browse/CCBC-855): Fix dead assignments in `contrib/genhash`.
+  * [CCBC-854](https://issues.couchbase.com/browse/CCBC-854): Init vbguess array before entry lookup.
+  * [CCBC-853](https://issues.couchbase.com/browse/CCBC-853): cbc-proxy: do not use client object after free.
+  * [CCBC-852](https://issues.couchbase.com/browse/CCBC-852): Do not free memory twice in N1QL index manager.
+
+## 2.8.1 (September 20 2017)
+
+* Check nodes number for durability checks. The store with durability
+  requirements will report more specific error when the library cannot
+  fulfill the condition during failover.
+  * Issues: [CCBC-817](https://issues.couchbase.com/browse/CCBC-817)
+
+* Handle enhanced error messages for subdoc operations. The subdoc
+  responses will now expose context and reference ID if present.
+  * Issues: [CCBC-846](https://issues.couchbase.com/browse/CCBC-846)
+
+* Discover and bootstrap analytics service from cluster configuration.
+  * Issues: [CCBC-840](https://issues.couchbase.com/browse/CCBC-840)
+
+* Improve documentation of configuration parameters.
+  * Issues: [CCBC-835](https://issues.couchbase.com/browse/CCBC-835)
+
+* Enable Error Map feature by default.
+  * Issues: [CCBC-838](https://issues.couchbase.com/browse/CCBC-838)
+
+* Cleanup and extend `minimal`, `libeventdirect`, `instancepool` examples
+
+* Tools:
+  * improve error reporting
+  * experimental subcommand `cbc-proxy`
+  * fix memory leaks
+  * retry store operations during population phase in `cbc-pillowfight`
+
+## 2.8.0 (August 31 2017)
+
+* Add support for OpenSSL-1.1.
+  * Issues: [CCBC-814](https://issues.couchbase.com/browse/CCBC-814)
+
+* Mask `LOCKED` status code for backward compatibility. This code
+  (as well as others possible codes with 'item-locked' attribute)
+  replaced with `LCB_KEY_EEXISTS` for `SET`, `REPLACE` and `DELETE`
+  operations, and with `LCB_ETMPFAIL` for the rest.
+  * Issues: [CCBC-832](https://issues.couchbase.com/browse/CCBC-832)
+
+* Stop enumerating bootstrap nodes and mechanisms when the server
+  returns authentication error.
+  * Issues: [CCBC-825](https://issues.couchbase.com/browse/CCBC-825)
+
+* Fixed double free error with `lcb_ping3`.
+  * Issues: [CCBC-826](https://issues.couchbase.com/browse/CCBC-826)
+
+* Exposed additional N1QL query parameters: `lcb_n1p_readonly`,
+  `lcb_n1p_scancap`, `lcb_n1p_pipelinecap`.
+  * Issues: [CCBC-823](https://issues.couchbase.com/browse/CCBC-823)
+
+* Fixed `cbc-subdoc/upsert` without XATTR.
+  * Issues: [CCBC-823](https://issues.couchbase.com/browse/CCBC-823)
+
+* XERROR attributes synchronized with recent list on server.
+  * Issues: [CCBC-828](https://issues.couchbase.com/browse/CCBC-828)
+
+* Add missing documentation, and update stability of the API.
+  * Issues:
+  [CCBC-830](https://issues.couchbase.com/browse/CCBC-830),
+  [CCBC-831](https://issues.couchbase.com/browse/CCBC-831),
+  [CCBC-827](https://issues.couchbase.com/browse/CCBC-827)
+
+* Do not throttle background configuration polling by throttle interval
+  of configuration error handler.
+  * Issues: [CCBC-829](https://issues.couchbase.com/browse/CCBC-829)
+
+* Turn on background polling by default. The library will try
+  to schedule configuration update every 2.5 seconds. To disable it
+  use `config_poll_interval=0`.
+  * Issues: [CCBC-836](https://issues.couchbase.com/browse/CCBC-836)
+
+## 2.7.7 (August 17 2017)
+
+* Implement new function `lcb_ping3`, which sends NOOP-like message to
+  each service in the cluster and allows to measure latency along with
+  health status of the connection. Might be useful for application-side
+  keep-alive mechanisms.
+  * Issues: [CCBC-801](https://issues.couchbase.com/browse/CCBC-801)
+
+* Detect and expose bucket type through `LCB_CNTL_BUCKETTYPE`:
+
+        lcb_BTYPE type;
+        lcb_cntl(instance, LCB_CNTL_GET, LCB_CNTL_BUCKETTYPE, &type);
+
+  * Issues: [CCBC-790](https://issues.couchbase.com/browse/CCBC-790)
+
+* Fixed setting expiration in subdoc mutations.
+  * Issues: [CCBC-799](https://issues.couchbase.com/browse/CCBC-816)
+
+* Fixed DNS SRV support of Fedora 26 and FreeBSD.
+  * Issues: [CCBC-816](https://issues.couchbase.com/browse/CCBC-816)
+
+* Fixed DNS SRV with SSL connections.
+  * Issues: [CCBC-794](https://issues.couchbase.com/browse/CCBC-794)
+
+* Define EREMOTEIO in libuv
+  * Issues: [CCBC-812](https://issues.couchbase.com/browse/CCBC-812)
+
+* New subdocument command to remove whole document
+  * Issues: [CCBC-811](https://issues.couchbase.com/browse/CCBC-811)
+
+* New cbc command: `cbc-subdoc`. It provides interactive shell, where
+  all subdocument commands accessible to inspect and modify documents
+  in the cluster.
+
+* New cbc command: `cbc-ping`. It sends NOOP-like messages to all accessible
+  services in the cluster, and displays the status along with latency.
+  * Issues: [CCBC-801](https://issues.couchbase.com/browse/CCBC-801)
+
+* Fix `cbc-cat --replica`, which now allows reading documents from replicas.
+  * Issues: [CCBC-820](https://issues.couchbase.com/browse/CCBC-820)
+
+* Implement NOOP command and `cbc-pillowfight --noop`, which sends NOOP
+  instead of data manipulation commands.
+  * Issues: [CCBC-801](https://issues.couchbase.com/browse/CCBC-801)
+
+* Clarify errors found in `.cbcrc`. Now it will display configuration path
+  along with error message.
+  * Issues: [CCBC-759](https://issues.couchbase.com/browse/CCBC-759]
+
+* Update examples:
+  * Support username/password in subdoc and libeventdirect examples
+  * Added example for subdoc XATTRs
+
+* Integrate fix for parallel build with dtrace on FreeBSD
+  https://github.com/freebsd/freebsd-ports/commit/a71e1a86b851d42cd08319d9b28a4424e508e216
+
+* Make enhanced errors API public
+  * Issues: [CCBC-803](https://issues.couchbase.com/browse/CCBC-803)
+
+* Fixed various compiler and cppcheck warnings and documentation update.
+
+## 2.7.6 (July 11 2017)
+
+* Expose enhanced errors for data commands. Couchbase Server 5 might return
+  additional information about errors in the response body. According to
+  SDK-RFC-28, the library allow user code to inspect this information using
+  following functions:
+
+    * `lcb_resp_get_error_context(int, const lcb_RESPBASE *)`
+    * `lcb_resp_get_error_ref(int, const lcb_RESPBASE *)`
+
+  They both return non-NULL strings if any of error information accessible.
+  The lifetime of these fields limited by lifetime of the response object.
+  * Issues: [CCBC-781](https://issues.couchbase.com/browse/CCBC-781)
+
+* Report contextualized error messages during negotiation. The event reference
+  could be used to find more details about authentication errors in the server
+  logs.
+  * Issues: [CCBC-780](https://issues.couchbase.com/browse/CCBC-780)
+
+* Specify correct protocol level for `SO_KEEPALIVE`. This fixes setting
+  `tcp_keepalive` option on connections.
+  * Issues: [CCBC-798](https://issues.couchbase.com/browse/CCBC-798)
+
+* Implement Error Map Retries. This implements the mechanics needed to retry
+  commands on various errors based on dynamic settings supplied via the error map.
+  * Issues: [CCBC-783](https://issues.couchbase.com/browse/CCBC-783)
+
+* Add cluster admin provider. This provider doesn't do anything except serve
+  as a source of management hostnames. And the library will fall back to it
+  when bucket is not specified for cluster management connections.
+  * Issues: [CCBC-797](https://issues.couchbase.com/browse/CCBC-797)
+
+* Implement RBAC user management in cbc tools. In addition to `examples/users`,
+  this can be a demonstration of new security APIs which appear in Couchbase
+  Server 5.
+  * Issues: [CCBC-757](https://issues.couchbase.com/browse/CCBC-757)
+
+* Allow to inspect query errors in `cbc-n1qlback`. The command will write
+  details for failed queries to file, specified with option `--error-log`.
+
+* Fix memory leak in io::Pool
+  * Issues: [CCBC-791](https://issues.couchbase.com/browse/CCBC-791)
+
+* Fix `LCB_SDCMD_GET_FULLDOC`. This would not actually work beforehand
+  because the opcode it's mapped to is 0, and we used 0 as a sentinel
+  value for an invalid opcode within the subdoc implementation.
+  * Issues: [CCBC-792](https://issues.couchbase.com/browse/CCBC-792)
+
+* Add LCB_NOT_AUTHORIZED error code. This error code maps to
+  Memcached's EACCESS
+
+* Don't send empty Authorization header for HTTP requests, If there's
+  no username and/or password
+  * Issues: [CCBC-789](https://issues.couchbase.com/browse/CCBC-789)
+
+* Internal refactoring:
+  - `io::Pool` - remove empty dtor
+  - Fix `BadPluginEnvironment` test on Fedora where libm.so is ld script
+  - Add missing commands for `cbc-help`
+
+* Documentation update:
+  - Add additional documentation for `lcb_n1ql_cancel()`
+  - Typos
+
+## 2.7.5 (May 17 2017)
+
+* Allow to disable sending the `HELLO` command when connecting to a server.
+  Sending `HELLO` will cause a bootstrap failure with Couchbase Server 2.0 and
+  older.
+  * Issues: [CCBC-786](https://issues.couchbase.com/browse/CCBC-786)
+
+* Fix error return value on reprepared query.
+  Previously an error was returned if a N1QL query was reprepared, because
+  the prior internal failure status was not updated.
+  * Issues: [CCBC-782](https://issues.couchbase.com/browse/CCBC-782)
+
+* Check for more N1QL error strings indicating the need to reprepare a statement.
+
+* Fix uninitialized memory issue when initializing `lcb::Server` and `mc_PIPELINE`
+
+* Couchbase 5.0 additions for Subdocument.
+  This adds new protocol extensions for Couchbase 5.0. This consists of:
+  * New `LCB_SDCMD_SET_FULLDOC` and `LCB_SDCMD_GET_FULLDOC` for full-doucument
+    gets and sets via the subdoc API. This allows to access xattrs atomically
+    with the document body.
+  * New 'document flags'. These are in the form of `LCB_CMDSUBDOC_F_`.
+  * Issues: [CCBC-774](https://issues.couchbase.com/browse/CCBC-774)
+
+* Fix bug where CCCP subsystem would be suspended indefinitely.
+  CCCP subsystem would hang if an error was received for the config request
+  itself.
+  * Issues: [CCBC-779](https://issues.couchbase.com/browse/CCBC-779)
+
+* Fix bootstrap with `LCB_TYPE_CLUSTER`. Previously bootstrap would fail because
+  the client would not send proper credentials. Note that at this point, the
+  `default` bucket must still exist.
+  * Issues: [CCBC-778](https://issues.couchbase.com/browse/CCBC-778)
+
+* Ignore empty DNS SRV replies.
+  Some buggy DNS configurations return positive replies to SRV queries, but
+  without actually containing any kind of A record as a response.
+  * Issues: [CCBC-776](https://issues.couchbase.com/browse/CCBC-776)
+
+* Enable background polling for configuration changes.
+  This allows the client to periodically poll for configuration changes. This
+  feature is disabled by default. You can use the `config_poll_interval`
+  setting to enable it in the connection string.
+  * Issues: [CCBC-627](https://issues.couchbase.com/browse/CCBC-627)
+
+* Enable TCP Keepalive for newly created sockets.
+  Newly created sockets have TCP keepalive enabled in order to avoid firewalls
+  breaking connections due to inactivity. TCP Keepalive does not yet work for
+  the libuv plugin (e.g. nodejs).
+  You can use the `tcp_keepalive=false` directive in the connection string
+  to disable it.
+  * Issues: [CCBC-690](https://issues.couchbase.com/browse/CCBC-690)
+
+## 2.7.4 (April 18 2017)
+
+* Send `SELECT_BUCKET` command by default if server supports it. This enables
+  new-style 'RBAC' authentication by default. In 2.7.3 users were required to
+  use `select_bucket=true` in the connection string to enable this feature.
+  In this version, the option is still available but is now mainly useful to
+  disable it.
+
+* Improve `lcb_AUTHENTICATOR` API. This provides better documentation and some
+  API/design/implementation fixes to the authenticator interface. The
+  authenticator may be useful for integrators/wrappers who wish to correlate
+  multiple credentials with their buckets.
+  Note that the use of `lcb_AUTHENTICATOR` is *not* required for RBAC support.
+  In order to use RBAC, simply make use of the `username` field in
+  the `lcb_create_st` struct, or the `username` parameter in the connection
+  string.
+  * Issues: [CCBC-751](https://issues.couchbase.com/browse/CCBC-751)
+
+* Fix bug where `lcb_get_server_list()` would return NULL.
+  * Issues: [CCBC-764](https://issues.couchbase.com/browse/CCBC-764)
+
+* Fix bug where client would not recover from failover. Clients from version
+  2.7.1 through 2.7.3 would not obtain a new cluster map after a node had
+  been failed over (e.g. by hitting the "fail over" button in the UI).
+  * Issues: [CCBC-761](https://issues.couchbase.com/browse/CCBC-761)
+
+## 2.7.3 (March 21 2017)
+
+* Provide the ability to send the `SELECT_BUCKET` when establishing a
+  to a server. This is a building block allowing us to use 'RBAC'/username
+  auth in the future.
+  Note that this requires the `select_bucket=true` option in the connection
+  string or equivalent, and that this feature as a whole is considered
+  experimental.
+  * Priority: Major
+  * Issues: [CCBC-758](https://issues.couchbase.com/browse/CCBC-758)
+
+* Provide an option to disable DNS-SRV lookups. Because DNS SRV lookups often
+  result in no result (i.e. `NXDOMAIN`) - which takes longer, allowing to
+  disable such lookups may speed up startup time.
+  This option is available via the connection string, using `dnssrv=off`
+  * Priority: Minor
+  * Issues: [CCBC-756](https://issues.couchbase.com/browse/CCBC-756)
+
+* Send client/user-specific identifier in `User-Agent` HTTP header.
+  The library already does this for data nodes (Memcached). Using it in HTTP
+  services allows better supportability when diagnosing issues by reading the
+  HTTP logs.
+  * Priority: Major
+  * Issues: [CCBC-755](https://issues.couchbase.com/browse/CCBC-755)
+
+* Fix bug where DNS SRV hostnames would not be used.
+  While DNS SRV lookup was working, the library would not actually attempt
+  bootstrap off those received hostnames.
+  * Priority: Major
+  * Issues: [CCBC-753](https://issues.couchbase.com/browse/CCBC-753)
+
+* Provide experimental Analytics support.
+  This allows access to the Couchbase Analytics Service, available in
+  some pre-release builds. API and syntax wise, Analytics is very similar
+  to N1QL.
+  To use the analytics service, set the `LCB_CMDN1QL_F_CBASQUERY` bit in
+  `lcb_CMDN1QL::cmdflags`, and provide the appropriate _host:port_ combination
+  in the `lcb_CMDN1QL::host` field. - Currently, analytics support is not
+  used in the cluster map/configuration.
+  * Priority: Major
+  * Issues: [CCBC-734](https://issues.couchbase.com/browse/CCBC-734)
+
+## 2.7.2 (February 21 2017)
+
+This release consists of additional internal refactoring and some improved
+logging messages. There is enhanced experimental XATTR support. This release
+also contains some bug fixes:
+
+* Fix build issues on FreeBSD. This allows normal BSD `make` to be used, rather
+  than forcing `gmake`
+
+* Fixed broken JIRA link in README
+
+* Fix hanging SSL connections in IOCP/Completion mode. This would sometimes
+  stall the connection by not requesting a write if a read was in progress.
+  This would result in the command not being sent and the client hanging.
+  Note that this only affects completion-style I/O plugins such as IOCP and
+  libuv.
+  * Issues: [CCBC-744](https://issues.couchbase.com/browse/CCBC-744)
+
+* Rename `LCB_SDSPEC_F_VIRTPATH` to `LCB_SDSPEC_F_MACROVALUES`. `VIRTPATH`
+  is intended for possible future materialized XATTRs.
+
+* Add `LCB_SDSPEC_F_XATTR_DELETED_OK`, which maps to the protocol flag of
+  roughly the same name.
+
+## 2.7.1 (January 19 2017)
+
+This release consists of additional internal refactoring. More internals have
+been converted to C++.
+
+* Provide XATTR (Extended Attribute) prototype support.
+  This provides a prototype implementation of xattrs, allowing the client to
+  access extended (hidden) attributes of a document. This feature can be used
+  on the client side by simply setting the `LCB_SDSPEC_F_XATTRPATH` bit in
+  the `lcb_SDSPEC::options` field.
+  * Issues: [CCBC-728](https://issues.couchbase.com/browse/CCBC-728)
+
+* Add automatic DNS SRV record lookup when simple hostname supplied.
+  The library will now automatically attempt to look up SRV records
+  for various couchbase services if only one host is present in the
+  connection string. Automatic lookup will not be performed if more
+  than a single host is provded. See the [Java Documentation](https://developer.couchbase.com/documentation/server/current/sdk/java/managing-connections.html)
+  on the matter (go to the bottom of the page).
+  * Issues: [CCBC-566](https://issues.couchbase.com/browse/CCBC-566)
+
+## 2.7.0 (December 21 2016)
+
+This release consists mainly of internal refactoring. Many of the internals
+have been 'upgraded' to C++
+
+## 2.6.4 (November 28 2016)
+
+* Fix bug in pillowfight where large value sizes would cause a segfault.
+  * Issues: [CCBC-727](https://issues.couchbase.com/browse/CCBC-727)
+
+* Allow 64 bit values with `cbc-incr` and `cbc-decr`.
+  * Issues: [CCBC-716](https://issues.couchbase.com/browse/CCBC-716)
+
+* Fix encoding in `lcb_n1p_setconsistent_token`. This function would encode
+  it as `scan_vector` but it should be `scan_vectors`.
+
+* Refactor negotiation internals to use C++.
+  This is part of an internal refactoring to move our internals over to C++.
+  This will make the code more manageable and extendable in the future.
+
+## 2.6.3 (September 27 2016)
+
+* Fix memory corruption for some JSON APIs when no rows are returned.
+  This fixes a bug where the JSON parser would read from garbage memory when
+  parsing a response that had no rows, but due to a slow network, would be
+  received in multiple chunks.
+  This affects N1QL, CBFT, and View APIs.
+  * Priority: Major
+  * Issues: [CCBC-721](https://issues.couchbase.com/browse/CCBC-721)
+
+* Allow to adjust bytes to read per event loop iteration.
+  This allows applications with high network throughput but low CPU capacity
+  to prevent the library from oversaturating a specific event callback invocation
+  or starve other sockets. It may be controlled through the `read_chunk_size`
+  connection string option or via `lcb_cntl_string`.
+  * Priority: Major
+  * Issues: [CCBC-568](https://issues.couchbase.com/browse/CCBC-568)
+
+* Use `htonll` for CAS values.
+  This allows a consistent representation of CAS values regardless of underlying
+  platform. This allows interoperability between other SDKs with respect to
+  exchanging CAS values. This however may break interoperability with older
+  versions of the same SDK, if the CAS value is being passed around (which it
+  shouldn't be).
+
+* New subdocument additions.
+  This adds the `LCB_SUBDOC_F_MKDOCUMENT` flag which allows document creation
+  if the document does not exist, and can be used for mutation operations which
+  may create new paths or values. The `LCB_SUBDOC_CMD_GET_COUNT` is also added,
+  which is a new command which retrieves the number of elements (for an array)
+  or key-value items (within an object/dictionary) of a given path.
+  Both these features require Couchbase Server 4.6 (or its prereleases).
+  * Priority: Major
+  * Issues: [CCBC-718](https://issues.couchbase.com/browse/CCBC-718)
+
+## 2.6.2 (July 26 2016)
+
+* Don't crash on high number of FDs with select plugin. Because `select(2)`
+  can only accomodate up to a certain number of file descriptors in the
+  application, if opening a socket results in a too-high-numbered FD, the
+  plugin will return an error rather than silently failing during polling.
+  * Priority: Major
+  * Issues: [CCBC-567](https://issues.couchbase.com/browse/CCBC-567)
+
+* Pillowfight can now set ttl (expiry). This is done via the `-e` or `--expiry`
+  option.
+  * Priority: Major
+  * Issues: [CCBC-637](https://issues.couchbase.com/browse/CCBC-637)
+
+* Log URLs of HTTP requests. This may make it easier to debug some HTTP-based
+  APIs. The URLs are printed as part of the `TRACE` logging level.
+  * Priority: Major
+  * Issues: [CCBC-641](https://issues.couchbase.com/browse/CCBC-641)
+
+* Fix crash on shutdown with completion-based I/O. The crash was a result
+  of dereferencing the `lcb_t` after it had been destroyed. This bug affected
+  completion-based I/O subsystems such as libuv and IOCP.
+  * Priority: Major
+  * Issues: [CCBC-707](https://issues.couchbase.com/browse/CCBC-707)
+
+* Do not require `operation` field to be set on `lcb_CMDSTORE`.
+  Starting from this version, a new `lcb_storage_t` constant, `LCB_UPSERT`
+  has been added with a value of 0. This means that upsert operations no
+  longer need to explicitly use `LCB_SET`, it being the default.
+  * Priority: Major
+  * Issues: [CCBC-545](https://issues.couchbase.com/browse/CCBC-545)
+
+## 2.6.1 (June 21 2016)
+
+* Index management API now properly handles 'fields' field. Previously this
+  was treated as a csv string, when it is in fact a JSON array.
+
+* `pillowfight` now has a `--populate-only` option, which is useful when simply
+  trying to populate buckets with large amounts of data.
+
+* Allow to bypass OpenSSL initialization. This allows applications which already
+  have OpenSSL intialization code in place to suppress libcouchbase's own
+  OpenSSL initialization code. You can disable SSL initialization by using
+  `ssl=no_global_init` in the connection string.
+
+* Allow to toggle sending of multiple credentials in N1QL queries.
+  You can use the `LCB_CMD_F_MULTIAUTH` in the `lcb_CMDN1QL::cmdflags` field
+  to indicate that multiple credentials should be added. Otherwise only the
+  current bucket's credentials will be sent.
+
+* Fix infinite loop on completion (UV,nodejs,IOCP) type IO plugins.
+  This bug would be triggered when only a single server remained in the cluster
+  and that single server failed. This would result in the client never being
+  able to perform operations due to a delayed reference count decrement.
+  * Priority: Major
+  * Issues: [CCBC-704](https://issues.couchbase.com/browse/CCBC-704)
+
+## 2.6.0 (May 17 2016)
+
+* Improve index management API and implementation. The `rawjson` field was
+  being ignored and the `condition` field was missing as well.
+
+* Add pillowfight support for subdoc. At the simplest level you can simply
+  invoke pillowfight as `cbc-pillowfight --subdoc --json <other args>`.
+  Refer to the pillowfight documentation for more details.
+
+## 2.5.8 (April 19 2016)
+
+* Fix SSL connectivity errors with views and HTTP bootstrapping.
+  This would cause network connectivity issues when attempting to bootstrap
+  via `https://` or using views (`lcb_view_query()`). The fix is a workaround
+  to not advertise older SSL encryption methods.
+  * Priority: Major
+  * Issues: [CCBC-688](https://issues.couchbase.com/browse/CCBC-688)
+
+* Do not abort when receiving a memcached EINVAL response.
+  While the client should never end up in a situation where it receives an
+  `EINVAL` from the server, it should nevertheless not terminate the execution
+  of the current process. This bug was introduced in 2.5.6
+  * Issues: [CCBC-689](https://issues.couchbase.com/browse/CCBC-689)
+
+* Fix memory leak when using N1QL prepared statements.
+  Prepared statements would never be freed, even when the client handle was
+  destroyed (`lcb_destroy()`) causing a slight memory leak.
+
+* Append CRLF header after host header.
+  This would sometimes result in odd HTTP headers being sent out.
+  * Issues: [CCBC-694](https://issues.couchbase.com/browse/CCBC-694)
+
+* Experimental CBFT (Full-Text search API)
+  This version adds a new fulltext api. The API is a row-based API similar
+  to N1QL and MapReduce. See the `<libcouchbase/cbft.h>` header for more details.
+  The API is experimental and subject to change.
+  * Issues: [CCBC-638](https://issues.couchbase.com/browse/CCBC-638)
+
+* Allow additional client identifier for HELLO command.
+  The SDK sends a version string to the server when doing initial negotiation.
+  The server then uses this string in the context of any logging messages
+  pertaining to that connection. In this version, a new setting has been added
+  to allow 'user-defined' version strings to be appended to the logs. Note that
+  this feature is intended only for use with wrapping SDKs such as Python, node.js
+  and PHP so that their versions can be present in the log messages as well.
+  This setting is exposed as a string control (in the connection string, or
+  `lcb_cntl_string()` with the name of `client_string`.
+  * Issues: [CCBC-693](https://issues.couchbase.com/browse/CCBC-693)
+
+* vBucket retry logic changes.
+  The client will now retry at constant 100ms rate when receiving not-my-vbucket
+  error replies from the server (adjustable using `retry_nmv_interval`).
+  It will also only use fast-forward map to determine the new location for the
+  vbucket, and will not use extended hueristics.
+
+  The most noteworthy user-visible change is the 100ms retry interval which
+  will significantly decrease the network traffic used by the SDK
+  during a rebalance.
+
+  To restore the pre-2.5.8 behavior (i.e. use extended heuristics and and
+  exponential retry rate), specify `vb_noguess=false`.
+  * Priority: Major
+  * Issues: [CCBC-660](https://issues.couchbase.com/browse/CCBC-660)
+
+* Add interface for multi-bucket authentication.
+  A new API has been added to modify and add additional bucket/password
+  pairs in the library. This is done using `lcb_cntl` and the `LCB_CNTL_BUCKET_CRED`
+  setting.
+
+  Note that this functionality is not yet used in N1QL queries due to
+  [MB-16964](https://issues.couchbase.com/browse/MB-16964)
+  * Priority: Minor
+  * Issues: [CCBC-661](https://issues.couchbase.com/browse/CCBC-661)
+
+
+## 2.5.7 (March 22 2016)
+
+* High-level index management operations.
+  A volatile API for high level index management operations has been added to
+  assist in common N1QL index operations such as creating the primary index
+  and removing indexes.
+  * Priority: Major
+  * Issues: [CCBC-662](https://issues.couchbase.com/browse/CCBC-662)
+
+* Fix N1QL mutation token queries.
+  This fixes some bugs in the previous implementation of the way mutation tokens
+  were handled with `lcb_N1QLPARAMS`. The bugs and fixes only affect consumers
+  of that API. Couchbase SDKs do not consume this API
+  * Priority: Minor
+  * Issues: [CCBC-658](https://issues.couchbase.com/browse/CCBC-658)
+
+* Throttle config request retries on empty NMVB responses.
+  This changes the previous behavior where a new configuration would be
+  retrieved _immediately_ upon a not-my-vbucket reply if a configuration
+  was not included within the error reply itself. The new behavior is to
+  request a delayed retry (i.e. subject to the default throttle settings)
+  if the current configuration originated from the CCCP (Memcached) provider.
+  * Priority: Major
+  * Issues: [CCBC-681](https://issues.couchbase.com/browse/CCBC-681)
+
+* Rename `LCB_CLIENT_ETMPFAIL` to `LCB_CLIENT_ENOCONF`.
+  This error code is returned only when there is no current client configuration.
+  This error condition is _not_ temporary and is actually fatal; a result of
+  an initial bootstrapping failure. Note that the older name is still valid
+  in older code for compatibility purposes.
+  * Priority: Minor
+  * Issues: [CCBC-679](https://issues.couchbase.com/browse/CCBC-679)
+
+* Include PID in log messages on OS X.
+  This makes the library logs (via `LCB_LOGLEVEL` etc.) easier to read on a
+  mac. Previously this used to display only the thread ID, which was identical
+  for multiple processes. Now the display reads as _pid/tid_, making it easier
+  to read the logs in a multi-process environment.
+  * Priority: Minor
+  * Issues: [CCBC-677](https://issues.couchbase.com/browse/CCBC-677)
+
+
+## 2.5.6 (February 18 2016)
+
+* Sub-Document API (_experimental_)
+  The client-side sub-document API has been implemented. Sub-document is
+  a feature which vastly reduces network usage when operating on parts
+  of documents.
+  The API as it appears in this version is highly experimental and may
+  (and likely will) change. Examples of use can be found in the `examples/subdoc`
+  directory.
+  * Priority: Major
+
+* Make `lcb_sched_enter` and `lcb_sched_leave` optional.
+  When scheduling an operation (e.g. `lcb_get3()`), the scheduling function
+  will implicitly create a scheduling context and submit the operation if
+  none exists already. A scheduling context is explicitly created by calling
+  `lcb_sched_enter()` and finished by calling `lcb_sched_leave()` or
+  `lcb_sched_fail()`.
+  * Issues: [CCBC-664](https://issues.couchbase.com/browse/CCBC-664)
+  * Priority: Major
+
+* API3 is now stable.
+  The scheduling based API, introduced in version 2.4.0 and known as 'api3',
+  is now stable and considered the API for use with the library.
+  The previous API (i.e. 'api2') is considered deprecated.
+
+  While API3 has been promoted to stable in this version, it has been available
+  in its current form (and in a mostly compatible manner, _except_ the implicit
+  scheduling feature - CCBC-664) since 2.4.0.
+
+  Storing an item in API2:
+
+    lcb_get_store_t cmd = { 0 }, *cmd_p = &cmd;
+    cmd.v.v0.key = "key";
+    cmd.v.v0.nkey = 3;
+    cmd.v.v0.bytes = "value";
+    cmd.v.v0.nbytes = 5;
+    cmd.v.v0.operation = LCB_SET;
+    lcb_store(instance, NULL, 1, &cmd_p);
+
+  Storing an item in API3:
+
+    lcb_CMDSTORE cmd = { 0 };
+    LCB_CMD_SET_KEY(&cmd, "key", 3);
+    LCB_CMD_SET_VALUE(&cmd, "value", 5);
+    cmd.operation - LCB_SET;
+    lcb_store3(instance, NULL, &cmd);
+
+
+* Add `libcouchbase/` string to version identification to Memcached
+  Connections to memcached will now be identified as `libcouchbase/version`
+  rather than `version`. This increases readability for server logs
+  * Issues: [CCBC-656](https://issues.couchbase.com/browse/CCBC-656)
+  * Priority: Minor
+
+* Hide `mutation_token` field from API3 mutation respones. The `mutation_token`
+  field has never been part of the API itself (it was previously present when
+  api3 was marked as "experimental").
+  The mutation token for any operation must now be retrieved using the
+  `lcb_resp_get_mutation_token()` to retrieve the actual mutation token.
+  * Issues: [CCBC-671](https://issues.couchbase.com/browse/CCBC-671)
+  * Priority: Minor
+
+* Server's `PROTOCOL_BINARY_RESPONSE_EINTERNAL` is no longer mapped to
+  `LCB_EINTERNAL`. `LCB_UNKNOWN_MEMCACHED_ERROR` will be returned instead
+
+* Allow get-and-touch with an expiry of 0.
+  Clearing a document's expiry with `get` is now possible, using the new
+  `LCB_CMDGET_F_CLEAREXP` in `lcb_CMDGET::cmdflags`.
+  * Issues: [CCBC-667](https://issues.couchbase.com/browse/CCBC-667)
+  * Priority: Major
+
+* Allow multiple buckets when using sequence number consistency with N1QL
+  This uses the new internal `scan_vector` protocol supporting multiple buckets,
+  each providing their own `lcb_MUTATION_TOKEN` objects.
+  * Issues: [CCBC-658](https://issues.couchbase.com/browse/CCBC-658)
+  * Priority: Major
+
+## 2.5.5 (January 12 2016)
+
+* Add `retry_interval` string option to adjust retry interval.
+  This allows the setting to be modified via `lcb_cntl_string()` and specified
+  in the connection string.
+  * Priority: Major
+  * Issues: [CCBC-654](https://issues.couchbase.com/browse/CCBC-654)
+
+* Handle backslashes in view row ID fields.
+  This would previously not be handled correctly as the backslashes would not
+  be removed, for example an ID of `has_a_"quote` would appear in the API as
+  `has_a_\"quote`. This has been fixed and document IDs are now properly
+  processed as JSON
+  * Priority: Major
+  * Issues: [CCBC-649](https://issues.couchbase.com/browse/CCBC-649)
+
+* Allow 'file-only' configuration mode.
+  This allows applications to make the library instance exclusively configured
+  from a file on the local filesystem rather than through network bootstrap.
+  This feature is undocumented and unsupported. It may be enabled using the
+  `bootstrap_on=file_only` connection string directive.
+  * Priority: Major
+  * Issues: [CCBC-652](https://issues.couchbase.com/browse/CCBC-652)
+
+* Log when squashing network errors.
+  This will make the library log the original error whenever a network error
+  is translated from a more detailed description into `LCB_NETWORK_ERROR`
+  (in case `detailed_errcodes` is not enabled), or if an OS-level error is
+  found which cannot be translated into a more specific library error.
+  * Priority: Major
+
+* Fix memcached/ketama hashing
+  This fixes a bug in the ketama hasing code which caused a key to be mapped
+  to an effectively arbitrary server for the library instance. In practice the
+  node a key was mapped to depended on the order in which the hosts were
+  specified in the connection string. This has been fixed to always use
+  hashing based on the lexical sort order of each server node.
+  It is highly recommended that applications upgrade to this version (2.5.5)
+  for proper memcached (cache) bucket functionality.
+  * Priority: Critical
+  * Issues: [CCBC-653](https://issues.couchbase.com/browse/CCBC-653)
+
+* Add `cbc-touch` subcommand.
+  This now allows the simple "touching", or modifying expiration time via the
+  `cbc` command line client.
+  * Priority: Major
+  * Issues: [CCBC-651](https://issues.couchbase.com/browse/CCBC-651)
+
+
 ## 2.5.4 (November 25 2015)
 
 * Validate vBucket master nodes for bounds when receiving new configuration.
@@ -658,7 +1393,7 @@ new 2.5 version is built on the 2.4.x codebase.
   feature, a `cbc stats --keystats` option is also provided to employ
   this functionality from the command line.
   * Priority: Major
-  * Issues: [CCBC-318](http://couchbase.com/issues/CCBC-318)
+  * Issues: [CCBC-318](http://issues.couchbase.com/browse/CCBC-318)
 
 * Add more details about replica nodes in the `cbc hash` command.
   * Priority: Minor
@@ -669,7 +1404,7 @@ new 2.5 version is built on the 2.4.x codebase.
   could be retrieved. Using the `LCB_CNTL_BUCKETNAME` setting, the bucket
   name will now be returned.
   * Priority: Major
-  * Issues: [CCBC-502](http://couchbase.com/issues/CCBC-502)
+  * Issues: [CCBC-502](http://issues.couchbase.com/browse/CCBC-502)
 
 ## 2.4.1
 
@@ -2352,5 +3087,3 @@ These changes extend existing features with enhanced APIs
 * Basic TAP protocol implementation
 
 * Initial win32 support
-
-

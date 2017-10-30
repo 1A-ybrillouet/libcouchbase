@@ -6,6 +6,7 @@
 #include <fstream>
 #include <vector>
 #include <map>
+#include "contrib/lcb-jsoncpp/lcb-jsoncpp.h"
 
 using std::string;
 using std::vector;
@@ -54,10 +55,10 @@ ConfigTest::testConfig(const char *fname, bool checkNew)
     ASSERT_TRUE(vbc != NULL);
     int rv = lcbvb_load_json(vbc, testData.c_str());
     ASSERT_EQ(0, rv);
-    ASSERT_GT(vbc->nsrv, 0);
+    ASSERT_GT(vbc->nsrv, (unsigned int)0);
 
     if (vbc->dtype == LCBVB_DIST_VBUCKET) {
-        ASSERT_GT(vbc->nvb, 0);
+        ASSERT_GT(vbc->nvb, (unsigned int)0);
 
         for (unsigned ii = 0; ii < vbc->nvb; ii++) {
             lcbvb_vbmaster(vbc, ii);
@@ -93,10 +94,19 @@ ConfigTest::testConfig(const char *fname, bool checkNew)
     size_t nk = strlen(k);
     // map the key
     int srvix, vbid;
-    lcbvb_map_key(vbc, k, nk, &vbid, &srvix);
     if (vbc->dtype == LCBVB_DIST_KETAMA) {
+        if (testData.find("$HOST") != string::npos) {
+            ASSERT_TRUE(vbc->continuum == NULL);
+            ASSERT_EQ(0, vbc->ncontinuum);
+            lcbvb_replace_host(vbc, "localhost");
+        }
+
+        ASSERT_TRUE(vbc->continuum != NULL);
+        ASSERT_EQ(160 * vbc->nsrv, vbc->ncontinuum);
+        lcbvb_map_key(vbc, k, nk, &vbid, &srvix);
         ASSERT_EQ(0, vbid);
     } else {
+        lcbvb_map_key(vbc, k, nk, &vbid, &srvix);
         ASSERT_NE(0, vbid);
     }
     lcbvb_destroy(vbc);
@@ -133,6 +143,8 @@ TEST_F(ConfigTest, testAltMap)
 {
     lcbvb_CONFIG *cfg = lcbvb_create();
     lcbvb_genconfig(cfg, 4, 1, 64);
+    lcbvb_genffmap(cfg);
+
     string key("Dummy Key");
     int vbix = lcbvb_k2vb(cfg, key.c_str(), key.size());
     int master = lcbvb_vbmaster(cfg, vbix);
@@ -242,13 +254,14 @@ TEST_F(ConfigTest, testNondataNodes)
         servers.size(), // include non-data servers
         nreplica,
         1024);
-
     ASSERT_EQ(0, rv);
+    lcbvb_genffmap(cfg_ex);
 
     lcbvb_CONFIG *cfg_old = lcbvb_create();
     rv = lcbvb_genconfig_ex(cfg_old, "default", NULL,
         &servers[0], ndatasrv, nreplica, 1024);
     ASSERT_EQ(0, rv);
+    lcbvb_genffmap(cfg_old);
 
     ASSERT_EQ(ndatasrv, cfg_ex->ndatasrv);
     ASSERT_EQ(nservers, cfg_ex->nsrv);
@@ -271,17 +284,13 @@ TEST_F(ConfigTest, testNondataNodes)
 
         lcbvb_map_key(cfg_old, s.c_str(), s.size(), &vbid, &ix_exp);
         lcbvb_map_key(cfg_ex, s.c_str(), s.size(), &vbid, &ix_cur);
-        ASSERT_TRUE(ix_exp > -1 && ix_exp <  cfg_ex->ndatasrv);
+        ASSERT_TRUE(ix_exp > -1 && ix_exp < (int)cfg_ex->ndatasrv);
         ASSERT_EQ(ix_exp, ix_cur);
     }
 
-    // On the new config, ensure that:
-    // 1) Remap maps to all replicas
-    // 2) Remap never maps to a non-data node.
+    // On the new config, ensure that remap never maps to a non-data node.
     for (ii = 0; ii < keys.size(); ii++) {
-        map<int, bool> usedMap;
         const string& s = keys[ii];
-
         for (size_t jj = 0; jj < cfg_ex->nsrv * 2; jj++) {
             int ix;
             lcbvb_map_key(cfg_ex, s.c_str(), s.size(), &vbid, &ix);
@@ -289,12 +298,8 @@ TEST_F(ConfigTest, testNondataNodes)
             if (newix == -1) {
                 continue;
             } else {
-                ASSERT_TRUE(newix < cfg_ex->ndatasrv);
-                usedMap[newix] = true;
+                ASSERT_TRUE(newix < (int)cfg_ex->ndatasrv);
             }
-        }
-        for (size_t jj = 0; jj < cfg_ex->ndatasrv; ++jj) {
-            ASSERT_TRUE(usedMap[jj]);
         }
     }
 
@@ -305,7 +310,7 @@ TEST_F(ConfigTest, testNondataNodes)
         const string& s = keys[ii];
         lcbvb_map_key(cfg_old, s.c_str(), s.size(), &vbid, &ix_exp);
         lcbvb_map_key(cfg_ex, s.c_str(), s.size(), &vbid, &ix_cur);
-        ASSERT_TRUE(ix_exp > -1 && ix_exp < cfg_old->ndatasrv);
+        ASSERT_TRUE(ix_exp > -1 && ix_exp < (int)cfg_old->ndatasrv);
         ASSERT_EQ(ix_exp, ix_cur);
     }
 
@@ -313,4 +318,54 @@ TEST_F(ConfigTest, testNondataNodes)
     lcbvb_destroy(cfg_ex);
     lcbvb_destroy(cfg_old);
 
+}
+
+TEST_F(ConfigTest, testKetamaUniformity)
+{
+    string txt = getConfigFile("memd_45.json");
+    lcbvb_CONFIG *vbc = lcbvb_parse_json(txt.c_str());
+    ASSERT_TRUE(vbc != NULL);
+    ASSERT_EQ(4, vbc->nsrv);
+    ASSERT_EQ(LCBVB_DIST_KETAMA, vbc->dtype);
+
+    // Ensure the continuum stuff is NULL!
+    ASSERT_TRUE(vbc->continuum == NULL);
+    ASSERT_EQ(0, vbc->ncontinuum);
+    lcbvb_replace_host(vbc, "localhost");
+
+    ASSERT_STREQ("10.0.0.195:12000", vbc->servers[0].authority);
+    ASSERT_STREQ("localhost:12002", vbc->servers[1].authority);
+    ASSERT_STREQ("localhost:12004", vbc->servers[2].authority);
+    ASSERT_STREQ("localhost:12006", vbc->servers[3].authority);
+    lcbvb_destroy(vbc);
+}
+
+TEST_F(ConfigTest, testKetamaCompliance) {
+    string txt = getConfigFile("memd_ketama_config.json");
+    lcbvb_CONFIG *vbc = lcbvb_parse_json(txt.c_str());
+    ASSERT_TRUE(vbc != NULL);
+    ASSERT_EQ(4, vbc->nsrv);
+    ASSERT_EQ(LCBVB_DIST_KETAMA, vbc->dtype);
+
+    lcbvb_replace_host(vbc, "192.168.1.104");
+    // Now, load the hash file
+    string expected_txt = getConfigFile("ketama_expected.json");
+    Json::Value json;
+    ASSERT_TRUE(Json::Reader().parse(expected_txt, json));
+
+    ASSERT_EQ(json.size(), vbc->ncontinuum);
+
+    // Iterate over the continuum in the vbuckets
+    for (size_t ii = 0; ii < json.size(); ++ii) {
+        const Json::Value& cur = json[static_cast<int>(ii)];
+        unsigned exp_hash = cur["hash"].asUInt();
+        string exp_server = cur["hostname"].asString();
+        unsigned got_hash = vbc->continuum[ii].point;
+        unsigned got_index = vbc->continuum[ii].index;
+
+        ASSERT_EQ(exp_server, vbc->servers[got_index].authority);
+        ASSERT_EQ(exp_hash, got_hash);
+    }
+
+    lcbvb_destroy(vbc);
 }

@@ -74,7 +74,15 @@ typedef enum {
     LCB_ERRTYPE_SRVLOAD = 1 << 7,
 
     /** Error code indicating the server generated this message */
-    LCB_ERRTYPE_SRVGEN = 1 << 8
+    LCB_ERRTYPE_SRVGEN = 1 << 8,
+
+    /**
+     * Error code indicates document (fulldoc) access ok, but
+     * error in performing subdocument operation. Note that this only
+     * covers errors which relate to a specific operation, rather than
+     * operations which prevent _any_ subdoc operation from executing.
+     */
+    LCB_ERRTYPE_SUBDOC = 1 << 9
 } lcb_errflags_t;
 
 /* PRIVATE. This is just here to instruct/inform users to use the more detailed codes */
@@ -237,10 +245,10 @@ typedef enum {
     X(LCB_CLIENT_ENOMEM, 0x1A, LCB_ERRTYPE_FATAL, \
       "Memory allocation for libcouchbase failed. Severe problems ahead") \
     \
-    /** Client could not forward the request. This is typically received when
+    /** Client could not schedule the request. This is typically received when
      an operation is requested before the initial bootstrap has completed */ \
-    X(LCB_CLIENT_ETMPFAIL, 0x1B, LCB_ERRTYPE_TRANSIENT, \
-      "Temporary failure on the client side. Did you call lcb_connect?") \
+    X(LCB_CLIENT_ENOCONF, 0x1B, LCB_ERRTYPE_TRANSIENT, \
+      "Client not bootstrapped. Ensure bootstrap/connect was attempted and was successful") \
     \
     X(LCB_EBADHANDLE, 0x1C, LCB_ERRTYPE_INPUT, \
       "Bad handle type for operation. " \
@@ -451,7 +459,61 @@ typedef enum {
     /** The server replied that the given mutation has been lost */ \
     X(LCB_MUTATION_LOST, 0x3E, LCB_ERRTYPE_SRVGEN,\
       "The given mutation has been permanently lost due to the node failing " \
-      "before replication")
+      "before replication") \
+    X(LCB_SUBDOC_PATH_ENOENT, 0x3F, \
+      LCB_ERRTYPE_DATAOP|LCB_ERRTYPE_SRVGEN|LCB_ERRTYPE_SUBDOC, \
+      "Sub-document path does not exist") \
+    X(LCB_SUBDOC_PATH_MISMATCH, 0x40,\
+      LCB_ERRTYPE_DATAOP|LCB_ERRTYPE_SRVGEN|LCB_ERRTYPE_SUBDOC, \
+      "Type of element in sub-document path conflicts with type in document") \
+    X(LCB_SUBDOC_PATH_EINVAL, 0x41, \
+      LCB_ERRTYPE_INPUT|LCB_ERRTYPE_SRVGEN|LCB_ERRTYPE_SUBDOC, \
+      "Malformed sub-document path") \
+    X(LCB_SUBDOC_PATH_E2BIG, 0x42, \
+      LCB_ERRTYPE_INPUT|LCB_ERRTYPE_SRVGEN|LCB_ERRTYPE_SUBDOC, \
+      "Sub-document contains too many components") \
+    X(LCB_SUBDOC_DOC_E2DEEP, 0x43,\
+      LCB_ERRTYPE_DATAOP|LCB_ERRTYPE_SRVGEN|LCB_ERRTYPE_SUBDOC, \
+      "Existing document contains too many levels of nesting") \
+    X(LCB_SUBDOC_VALUE_CANTINSERT, 0x44, \
+      LCB_ERRTYPE_INPUT|LCB_ERRTYPE_SRVGEN|LCB_ERRTYPE_SUBDOC, \
+      "Subdocument operation would invalidate the JSON") \
+    X(LCB_SUBDOC_DOC_NOTJSON, 0x45,\
+      LCB_ERRTYPE_DATAOP|LCB_ERRTYPE_SRVGEN|LCB_ERRTYPE_SUBDOC, \
+      "Existing document is not valid JSON") \
+    X(LCB_SUBDOC_NUM_ERANGE, 0x46, \
+      LCB_ERRTYPE_DATAOP|LCB_ERRTYPE_SRVGEN|LCB_ERRTYPE_SUBDOC, \
+      "The existing numeric value is too large") \
+    X(LCB_SUBDOC_BAD_DELTA, 0x47,\
+      LCB_ERRTYPE_DATAOP|LCB_ERRTYPE_SRVGEN|LCB_ERRTYPE_SUBDOC, \
+      "Delta must be numeric, within the 64 bit signed range, and non-zero") \
+    X(LCB_SUBDOC_PATH_EEXISTS, 0x48,\
+      LCB_ERRTYPE_DATAOP|LCB_ERRTYPE_SRVGEN|LCB_ERRTYPE_SUBDOC, \
+      "The given path already exists in the document") \
+    X(LCB_SUBDOC_MULTI_FAILURE, 0x49,\
+      LCB_ERRTYPE_DATAOP|LCB_ERRTYPE_SRVGEN|LCB_ERRTYPE_SUBDOC, \
+      "Could not execute one or more multi lookups or mutations") \
+    X(LCB_SUBDOC_VALUE_E2DEEP, 0x4A,\
+      LCB_ERRTYPE_INPUT|LCB_ERRTYPE_SRVGEN|LCB_ERRTYPE_SUBDOC, \
+      "Value is too deep to insert") \
+    X(LCB_EINVAL_MCD, 0x4B, LCB_ERRTYPE_SRVGEN|LCB_ERRTYPE_INTERNAL, \
+        "A badly formatted packet was sent to the server. Please report this in a bug") \
+    X(LCB_EMPTY_PATH, 0x4C, LCB_ERRTYPE_INPUT, "Missing subdocument path") \
+    X(LCB_UNKNOWN_SDCMD, 0x4D, LCB_ERRTYPE_INPUT, "Unknown subdocument command") \
+    X(LCB_ENO_COMMANDS, 0x4E, LCB_ERRTYPE_INPUT, "No commands specified") \
+    X(LCB_QUERY_ERROR, 0x4F, LCB_ERRTYPE_SRVGEN, \
+        "Query execution failed. Inspect raw response object for information") \
+    \
+    X(LCB_GENERIC_TMPERR, 0x50, LCB_ERRTYPE_TRANSIENT|LCB_ERRTYPE_SRVGEN, \
+        "Generic temporary error received from server") \
+    X(LCB_GENERIC_SUBDOCERR, 0x51, LCB_ERRTYPE_SUBDOC|LCB_ERRTYPE_SRVGEN, \
+        "Generic subdocument error received from server") \
+    X(LCB_GENERIC_CONSTRAINT_ERR, 0x52, LCB_ERRTYPE_INPUT|LCB_ERRTYPE_SRVGEN, \
+        "Generic constraint error received from server") \
+    X(LCB_NAMESERVER_ERROR, 0x53, LCB_ERRTYPE_NETWORK, \
+        "Invalid reply received from nameserver") \
+    X(LCB_NOT_AUTHORIZED, 0x54, LCB_ERRTYPE_INPUT|LCB_ERRTYPE_SRVGEN, \
+        "Not authorized for operation")
 
 /** Error codes returned by the library. */
 typedef enum {
@@ -469,6 +531,9 @@ typedef enum {
     /* The errors below this value reserver for libcouchbase usage. */
     LCB_MAX_ERROR = 0x1000
 } lcb_error_t;
+
+/** @deprecated Use new, less ambiguous identifier (@ref LCB_CLIENT_ENOCONF) */
+#define LCB_CLIENT_ETMPFAIL LCB_CLIENT_ENOCONF
 
 /** @brief If the error is a result of bad input */
 #define LCB_EIFINPUT(e) (lcb_get_errtype(e) & LCB_ERRTYPE_INPUT)
@@ -489,6 +554,7 @@ typedef enum {
 #define LCB_EIFPLUGIN(e) (lcb_get_errtype(e) & LCB_ERRTYPE_PLUGIN)
 #define LCB_EIFSRVLOAD(e) (lcb_get_errtype(e) & LCB_ERRTYPE_SRVLOAD)
 #define LCB_EIFSRVGEN(e) (lcb_get_errtype(e) & LCB_ERRTYPE_SRVGEN)
+#define LCB_EIFSUBDOC(e) (lcb_get_errtype(e) & LCB_ERRTYPE_SUBDOC)
 
 /**
  * @brief Get error categories for a specific code
@@ -510,6 +576,35 @@ int lcb_get_errtype(lcb_error_t err);
  */
 LIBCOUCHBASE_API
 const char *lcb_strerror(lcb_t instance, lcb_error_t error);
+
+/**
+ * Get a shorter textual description of an error message. This is the
+ * constant name
+ */
+LCB_INTERNAL_API
+const char *lcb_strerror_short(lcb_error_t error);
+
+/**
+ * This may be used in conjunction with the errmap callback if it wishes
+ * to fallback for default behavior for the given code.
+ * @uncomitted
+ */
+LIBCOUCHBASE_API
+lcb_error_t lcb_errmap_default(lcb_t instance, lcb_U16 code);
+
+/**
+ * Callback for error mappings. This will be invoked when requesting whether
+ * the user has a possible mapping for this error code.
+ *
+ * This will be called for response codes which may be ambiguous in most
+ * use cases, or in cases where detailed response codes may be mapped to
+ * more generic ones.
+ */
+typedef lcb_error_t (*lcb_errmap_callback)(lcb_t instance, lcb_U16 bincode);
+
+/**@uncommitted*/
+LIBCOUCHBASE_API
+lcb_errmap_callback lcb_set_errmap_callback(lcb_t, lcb_errmap_callback);
 
 #ifdef __cplusplus
 }

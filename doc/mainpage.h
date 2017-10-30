@@ -9,7 +9,6 @@
  * * @subpage lcb-init
  * * @subpage lcb-kv-api
  * * @subpage lcb-cntl-settings
- * * @subpage lcb-public-api3
  *
  * You may read about related Couchbase software at http://docs.couchbase.com/
  *
@@ -65,7 +64,6 @@
  * @brief Generic utilities and containers
  * @addtogroup lcb-generics
  * @{
- * @file src/simplestring.h
  * @file src/list.h
  * @file src/sllist.h
  * @file src/sllist-inl.h

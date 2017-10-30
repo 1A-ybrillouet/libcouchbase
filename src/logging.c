@@ -43,8 +43,8 @@
         #define GET_THREAD_ID() (long)syscall(SYS_gettid)
         #define THREAD_ID_FMT "ld"
     #elif defined(__APPLE__)
-        #define GET_THREAD_ID() pthread_mach_thread_np(pthread_self())
-        #define THREAD_ID_FMT "x"
+        #define GET_THREAD_ID() getpid(), pthread_mach_thread_np(pthread_self())
+        #define THREAD_ID_FMT "d/%x"
     #elif defined(__sun) && defined(__SVR4)
         #include <thread.h>
         /* Thread IDs are not global in solaris, so it's nice to print the PID alongside it */
@@ -202,7 +202,7 @@ void lcb_log_badconfig(const struct lcb_settings_st *settings,
     lcb_log(settings, subsys, severity, srcfile, srcline,
         "vBucket config parsing failed: %s. Raw text in DEBUG level", errstr);
     if (!origin_txt) {
-        errstr = "<FIXME: No origin text available>";
+        origin_txt = "<FIXME: No origin text available>";
     }
     lcb_log(settings, subsys, LCB_LOG_DEBUG, srcfile, srcline, "%s", origin_txt);
 }

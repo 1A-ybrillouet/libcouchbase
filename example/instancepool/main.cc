@@ -22,16 +22,14 @@
 using namespace lcb;
 
 extern "C" {
-static void
-get_callback(lcb_t instance, const void*, lcb_error_t err,
-    const lcb_get_resp_t *resp)
+static void get_callback(lcb_t instance, int, const lcb_RESPBASE *rb)
 {
-    if (err != LCB_SUCCESS) {
+    const lcb_RESPGET *rg = reinterpret_cast<const lcb_RESPGET*>(rb);
+    if (rb->rc != LCB_SUCCESS) {
         fprintf(stderr, "%p: Couldn't get key", instance);
     } else {
         fprintf(stderr, "%p: Got key %.*s with value %.*s\n", instance,
-            (int)resp->v.v0.nkey, resp->v.v0.key,
-            (int)resp->v.v0.nbytes, resp->v.v0.bytes);
+            (int)rg->nkey, rg->key, (int)rg->nvalue, rg->value);
     }
 }
 }
@@ -44,7 +42,7 @@ protected:
         // We override the initialize function to set the proper callback we
         // care about
         fprintf(stderr, "Initializing %p\n", instance);
-        lcb_set_get_callback(instance, get_callback);
+        lcb_install_callback3(instance, LCB_CALLBACK_GET, get_callback);
     }
 };
 
@@ -52,18 +50,14 @@ extern "C" {
 static void *
 pthr_func(void *arg) {
     Pool *pool = reinterpret_cast<Pool*>(arg);
-    lcb_get_cmd_t gcmd;
-    const lcb_get_cmd_t *cmdlist[1];
-    memset(&gcmd, 0, sizeof gcmd);
-    gcmd.v.v0.key = "foo";
-    gcmd.v.v0.nkey = 3;
-    cmdlist[0] = &gcmd;
+    lcb_CMDGET gcmd = { 0 };
+    LCB_CMD_SET_KEY(&gcmd, "foo", 3);
 
     // Get an instance to use
     lcb_t instance = pool->pop();
 
     // Issue the command
-    lcb_get(instance, NULL, 1, cmdlist);
+    lcb_get3(instance, NULL, &gcmd);
 
     // Wait for the command to complete
     lcb_wait(instance);
@@ -76,7 +70,7 @@ pthr_func(void *arg) {
 }
 
 #define NUM_WORKERS 20
-int main(void) {
+int main(int argc, char *argv[]) {
     lcb_create_st options;
     pthread_t workers[NUM_WORKERS];
     Pool *pool;
@@ -85,7 +79,17 @@ int main(void) {
     // set up the options to represent your cluster (hostname etc)
     memset(&options, 0, sizeof options);
     options.version = 3;
-    options.v.v3.connstr = "couchbase://localhost/default";
+    options.v.v3.connstr = "couchbase://localhost";
+    if (argc > 1) {
+        options.v.v3.connstr = argv[1];
+    }
+    if (argc > 2) {
+        options.v.v3.passwd = argv[2];
+    }
+    if (argc > 3) {
+        options.v.v3.username = argv[3];
+    }
+
     pool = new MyPool(options, 5);
 
     err = pool->connect();

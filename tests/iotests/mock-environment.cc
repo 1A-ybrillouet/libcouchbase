@@ -21,6 +21,9 @@
 #include <mocksupport/server.h>
 #include "mock-environment.h"
 #include <sstream>
+#include "internal.h" /* settings from lcb_t for logging */
+
+#define LOGARGS(instance, lvl) instance->settings, "tests-ENV", LCB_LOG_##lvl, __FILE__, __LINE__
 
 MockEnvironment *MockEnvironment::instance;
 
@@ -66,9 +69,10 @@ MockEnvironment::MockEnvironment(const char **args, std::string bucketname)
     SetUp();
 }
 
-void MockEnvironment::failoverNode(int index, std::string bucket)
+void MockEnvironment::failoverNode(int index, std::string bucket, bool rebalance)
 {
     MockBucketCommand bCmd(MockCommand::FAILOVER, index, bucket);
+    bCmd.set("rebalance", rebalance);
     sendCommand(bCmd);
     getResponse();
 }
@@ -108,16 +112,12 @@ std::vector<int> MockEnvironment::getMcPorts(std::string bucket)
     MockResponse resp;
     getResponse(resp);
     EXPECT_TRUE(resp.isOk());
-
-    const cJSON *payload = cJSON_GetObjectItem((cJSON *)resp.getRawResponse(),
-                                               "payload");
-    int nports = cJSON_GetArraySize((cJSON *)payload);
+    const Json::Value& payload = resp.constResp()["payload"];
 
     std::vector<int> ret;
 
-    for (int ii = 0; ii < nports; ii++) {
-        cJSON *ixobj = cJSON_GetArrayItem((cJSON *)payload, ii);
-        ret.push_back(ixobj->valueint);
+    for (int ii = 0; ii < (int)payload.size(); ii++) {
+        ret.push_back(payload[ii].asInt());
     }
     return ret;
 }
@@ -134,11 +134,35 @@ void MockEnvironment::setCCCP(bool enabled, std::string bucket,
 
     if (nodes != NULL) {
         const std::vector<int>& v = *nodes;
-        cJSON *array = cJSON_CreateArray();
+        Json::Value array(Json::arrayValue);
 
         for (std::vector<int>::const_iterator ii = v.begin(); ii != v.end(); ii++) {
-            cJSON *num = cJSON_CreateNumber(*ii);
-            cJSON_AddItemToArray(array, num);
+            array.append(*ii);
+        }
+
+        cmd.set("servers", array);
+    }
+
+    sendCommand(cmd);
+    getResponse();
+}
+
+void MockEnvironment::setEnhancedErrors(bool enabled, std::string bucket,
+                                        const std::vector<int>* nodes)
+{
+    MockCommand cmd(MockCommand::SET_ENHANCED_ERRORS);
+    cmd.set("enabled", enabled);
+
+    if (!bucket.empty()) {
+        cmd.set("bucket", bucket);
+    }
+
+    if (nodes != NULL) {
+        const std::vector<int>& v = *nodes;
+        Json::Value array(Json::arrayValue);
+
+        for (std::vector<int>::const_iterator ii = v.begin(); ii != v.end(); ii++) {
+            array.append(*ii);
         }
 
         cmd.set("servers", array);
@@ -170,7 +194,9 @@ void MockEnvironment::getResponse(MockResponse& ret)
 
     ret.assign(rbuf);
     if (!ret.isOk()) {
-        std::cout << ret;
+        std::cerr << "Mock command failed!" << std::endl;
+        std::cerr << ret.constResp()["error"].asString() << std::endl;
+        std::cerr << ret;
     }
 }
 
@@ -228,44 +254,61 @@ void MockEnvironment::createConnection(lcb_t &instance)
 
 }
 
-#define STAT_EP_VERSION "ep_version"
+#define STAT_VERSION "version"
 
 extern "C" {
-    static void statsCallback(lcb_t, const void *cookie,
-                              lcb_error_t err,
-                              const lcb_server_stat_resp_t *resp)
-    {
-        MockEnvironment *me = (MockEnvironment *)cookie;
-        ASSERT_EQ(LCB_SUCCESS, err);
+static void statsCallback(lcb_t instance, const void *cookie, lcb_error_t err, const lcb_server_stat_resp_t *resp)
+{
+    MockEnvironment *me = (MockEnvironment *)cookie;
+    ASSERT_EQ(LCB_SUCCESS, err);
 
-        if (resp->v.v0.server_endpoint == NULL) {
-            return;
-        }
+    if (resp->v.v0.server_endpoint == NULL) {
+        return;
+    }
 
-        if (!resp->v.v0.nkey) {
-            return;
-        }
+    if (!resp->v.v0.nkey) {
+        return;
+    }
 
-        if (resp->v.v0.nkey != sizeof(STAT_EP_VERSION) - 1  ||
-                memcmp(resp->v.v0.key, STAT_EP_VERSION,
-                       sizeof(STAT_EP_VERSION) - 1) != 0) {
-            return;
-        }
-        int version = ((const char *)resp->v.v0.bytes)[0] - '0';
-        if (version == 1) {
-            me->setServerVersion(MockEnvironment::VERSION_10);
-        } else if (version == 2) {
-            me->setServerVersion(MockEnvironment::VERSION_20);
-
-        } else {
-            std::cerr << "Unable to determine version from string '";
-            std::cerr.write((const char *)resp->v.v0.bytes,
-                            resp->v.v0.nbytes);
-            std::cerr << "' assuming 1.x" << std::endl;
-
-            me->setServerVersion(MockEnvironment::VERSION_10);
+    if (resp->v.v0.nkey != sizeof(STAT_VERSION) - 1 ||
+        memcmp(resp->v.v0.key, STAT_VERSION, sizeof(STAT_VERSION) - 1) != 0) {
+        return;
+    }
+    MockEnvironment::ServerVersion version = MockEnvironment::VERSION_UNKNOWN;
+    if (resp->v.v0.nbytes > 2) {
+        int major = ((const char *)resp->v.v0.bytes)[0] - '0';
+        int minor = ((const char *)resp->v.v0.bytes)[2] - '0';
+        switch (major) {
+            case 4:
+                switch (minor) {
+                    case 0:
+                        version = MockEnvironment::VERSION_40;
+                        break;
+                    case 1:
+                        version = MockEnvironment::VERSION_41;
+                        break;
+                    case 5:
+                        version = MockEnvironment::VERSION_45;
+                        break;
+                    case 6:
+                        version = MockEnvironment::VERSION_46;
+                        break;
+                }
+                break;
+            case 5:
+                version = MockEnvironment::VERSION_50;
+                break;
         }
     }
+    if (version == MockEnvironment::VERSION_UNKNOWN) {
+        lcb_log(LOGARGS(instance, ERROR), "Unable to determine version from string '%.*s', assuming 4.0",
+                (int)resp->v.v0.nbytes, (const char *)resp->v.v0.bytes);
+        version = MockEnvironment::VERSION_40;
+    }
+    me->setServerVersion(version);
+    lcb_log(LOGARGS(instance, INFO), "Using real cluster version %.*s (id=%d)", (int)resp->v.v0.nbytes,
+            (const char *)resp->v.v0.bytes, version);
+}
 }
 
 void MockEnvironment::bootstrapRealCluster()
@@ -296,14 +339,11 @@ void MockEnvironment::bootstrapRealCluster()
         // no body
     }
 
-    if (serverVersion == VERSION_20) {
-        // Couchbase 2.0.x
-        featureRegistry.insert("observe");
-        featureRegistry.insert("views");
-        featureRegistry.insert("http");
-        featureRegistry.insert("replica_read");
-        featureRegistry.insert("lock");
-    }
+    featureRegistry.insert("observe");
+    featureRegistry.insert("views");
+    featureRegistry.insert("http");
+    featureRegistry.insert("replica_read");
+    featureRegistry.insert("lock");
 
     numNodes = ii;
     lcb_destroy(tmphandle);
@@ -390,7 +430,7 @@ void MockEnvironment::SetUp()
     }
     serverParams = ServerParams(http,
                                 bucketName.c_str(),
-                                bucketName.c_str(),
+                                userName.c_str(),
                                 NULL);
 
     // Mock 0.6
@@ -439,50 +479,18 @@ MockCommand::MockCommand(Code code)
 {
     this->code = code;
     name = GetName(code);
-    command = cJSON_CreateObject();
-    payload = cJSON_CreateObject();
-    cJSON_AddItemToObject(command, "payload", payload);
-    cJSON_AddStringToObject(command, "command", name.c_str());
+    command["command"] = name;
+    payload = &(command["payload"] = Json::Value(Json::objectValue));
 }
 
 MockCommand::~MockCommand()
 {
-    cJSON_Delete(command);
-    payload = NULL;
-    command = NULL;
-}
-
-void MockCommand::set(const std::string &field, const std::string &value)
-{
-    cJSON_AddStringToObject(payload, field.c_str(), value.c_str());
-}
-
-void MockCommand::set(const std::string &field, int value)
-{
-    cJSON *num = cJSON_CreateNumber(value);
-    assert(num);
-    set(field, num);
-}
-
-void MockCommand::set(const std::string field, bool value)
-{
-    cJSON *v = value ? cJSON_CreateTrue() : cJSON_CreateFalse();
-    set(field, v);
-}
-
-void MockCommand::set(const std::string& field, cJSON *value)
-{
-    cJSON_AddItemToObject(payload, field.c_str(), value);
 }
 
 std::string MockCommand::encode()
 {
     finalizePayload();
-    char *s = cJSON_PrintUnformatted(command);
-    std::string ret(s);
-    ret += "\n";
-    free(s);
-    return ret;
+    return Json::FastWriter().write(command);
 }
 
 void MockKeyCommand::finalizePayload()
@@ -504,13 +512,12 @@ void MockMutationCommand::finalizePayload()
     set("OnMaster", onMaster);
 
     if (!replicaList.empty()) {
-        cJSON *arr = cJSON_CreateArray();
+        Json::Value arr(Json::arrayValue);
+        Json::Value& arrval = (*payload)["OnReplicas"] = Json::Value(Json::arrayValue);
         for (std::vector<int>::iterator ii = replicaList.begin();
                 ii != replicaList.end(); ii++) {
-            cJSON_AddItemToArray(arr, cJSON_CreateNumber(*ii));
+            arrval.append(*ii);
         }
-        cJSON_AddItemToObject(payload, "OnReplicas", arr);
-
     } else {
         set("OnReplicas", replicaCount);
     }
@@ -520,7 +527,7 @@ void MockMutationCommand::finalizePayload()
             fprintf(stderr, "Detected incompatible > 31 bit integer\n");
             abort();
         }
-        set("CAS", (int)cas);
+        set("CAS", static_cast<Json::UInt64>(cas));
     }
 
     if (!value.empty()) {
@@ -537,49 +544,25 @@ void MockBucketCommand::finalizePayload()
 
 void MockResponse::assign(const std::string &resp)
 {
-    jresp = cJSON_Parse(resp.c_str());
-    assert(jresp);
+    bool rv = Json::Reader().parse(resp, jresp);
+    assert(rv);
 }
 
 MockResponse::~MockResponse()
 {
-    if (jresp) {
-        cJSON_Delete(jresp);
-    }
 }
 
 std::ostream& operator<<(std::ostream& os, const MockResponse& resp)
 {
-    for (cJSON *js = resp.jresp->child; js; js = js->next) {
-        if (js->type == cJSON_String) {
-            os << js->string << "\t";
-            os << js->valuestring;
-        } else {
-            char *s = cJSON_Print(js);
-            os << s;
-            free(s);
-        }
-        os << std::endl;
-    }
+    os << Json::FastWriter().write(resp.jresp) << std::endl;
     return os;
 }
 
 bool MockResponse::isOk()
 {
-    cJSON *status = cJSON_GetObjectItem(jresp, "status");
-
-    if (!status) {
+    const Json::Value& status = static_cast<const Json::Value&>(jresp)["status"];
+    if (!status.isString()) {
         return false;
     }
-
-    if (status->type != cJSON_String) {
-        return false;
-    }
-
-    if (tolower(status->valuestring[0]) != 'o') {
-        return false;
-    }
-
-    return true;
-
+    return tolower(status.asString()[0]) == 'o';
 }

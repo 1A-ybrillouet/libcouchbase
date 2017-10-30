@@ -80,6 +80,9 @@ The following options control workload generation:
   option bypasses this stage. Useful if the items have already been loaded in a
   previous run.
 
+* `--populate-only`:
+  Stop after population. Useful to populate buckets with large amounts of data.
+
 * `-m`, `--min-size`=_MINSIZE_:
 * `-M`, `--max-size`=_MAXSIZE_:
   Specify the minimum and maximum value sizes to be stored into the cluster.
@@ -108,8 +111,10 @@ The following options control workload generation:
 * `-T`, `--timings`:
   Dump a histogram of command timings and latencies to the screen every second.
 
-
-The following options control how `cbc-pillowfight` connects to the cluster
+* `-e`, `--expiry`=_SECONDS_:
+  Set the expiration time on the document for _SECONDS_ when performing each
+  operation. Note that setting this too low may cause not-found errors to
+  appear on the screen.
 
 * `-U`, `--spec`=_SPEC_:
   A string describing the cluster to connect to. The string is in a URI-like syntax,
@@ -118,18 +123,15 @@ The following options control how `cbc-pillowfight` connects to the cluster
 
   The default for this option is `couchbase://localhost/default`
 
-* `-u`, `--username`=_USERNAME_:
-  Specify the _username_ for the bucket. As of Couchbase Server 2.5 this field
-  should be either left empty or set to the name of the bucket itself.
-
 * `-P`, `--password`=_SASLPASS_:
+
 * `-P -`, `--password=-`:
   Specify the SASL password for the bucket. This is only needed if the bucket is
   protected with a password. Note that this is _not_ the administrative password
   used to log into the web interface.
 
   Specifying the `-` as the password indicates that the program should prompt for the
-  password. You may also specify the password on the commandline, directly, 
+  password. You may also specify the password on the commandline, directly,
   but is insecure as command line arguments are visible via commands such as `ps`.
 
 * `-T`, `--timings`:
@@ -146,6 +148,49 @@ The following options control how `cbc-pillowfight` connects to the cluster
   This option may be specified multiple times, each time specifying a key=value
   pair (for example, `-Doperation_timeout=10 -Dconfig_cache=/foo/bar/baz`).
   See [ADDITIONAL OPTIONS](#additional-options) for more information
+
+* `--json`:
+  Make `pillowfight` store document as JSON rather than binary. This will
+  allow the documents to nominally be analyzed by other Couchbase services
+  such as Query and MapReduce.
+
+  JSON documents are created by creating an empty JSON object (`{}`) and then
+  repeated populating it with `Field_%d` property names (where `%d` is `1` and
+  higher), and setting its value to a repeating asterisk `*` up to 16 times:
+
+        {
+            "Field_1": "****************",
+            "Field_2": "****************",
+            "Field_3": "****************",
+            "Field_4": "****************",
+            "Field_5": "********"
+        }
+
+  When using document size constraints, be aware that the minimum and maximum
+  sizes (`--min-size` and `--max-size`) are not strict limits, and that the
+  resultant sizes may be bigger or smaller by a few bytes in order to satisfy
+  the requirements of proper JSON syntax.
+
+* `--noop`:
+  Use couchbase NOOP operations when running the workload. This mode ignores
+  population, and all other document operations. Useful as the most lightweight
+  workload.
+
+* `--subdoc`:
+  Use couchbase sub-document operations when running the workload. In this
+  mode `pillowfight` will use Couchbase
+  [sub-document operations](http://blog.couchbase.com/2016/february/subdoc-explained)
+  to perform gets and sets of data. This option must be used with `--json`
+
+* `--pathcount`:
+  Specify the number of paths a single sub-document operation should contain.
+  By default, each subdoc operation operates on only a single path within the
+  document. You can specify multiple paths to atomically executed multiple
+  subdoc operations within a single command.
+
+  This option does not affect the `--batch-size` option as a subdoc command
+  is considered as a single command (with respect to batching) regardless of
+  how many operations it contains.
 
 <a name="additional-options"></a>
 ## ADDITIONAL OPTIONS
@@ -190,6 +235,9 @@ command-line
 
 ### CONNECTION EXAMPLES
 
+The following examples show how to connect `pillowfight` to different types
+of cluster configurations.
+
 Run against a bucket (`a_bucket`) on a cluster on a remote host:
 
     cbc cat key -U couchbase://192.168.33.101/a_bucket
@@ -230,11 +278,19 @@ as a memcached bucket residing within a couchbase cluster (use the normal
 
     cbc cat key -U memcached://host1,host2,host3,host4
 
-### BENCHMARK EXAMPLES
+Connect to an SSL cluster at `secure.net`:
+
+    cbc-pillowfight -U couchbases://secure.net/topsecret_bucket
+
 
 Run against a bucket (`a_bucket`) on a cluster on a remote host:
 
     cbc-pillowfight -U couchbase://192.168.33.101/a_bucket
+
+### BENCHMARK EXAMPLES
+
+The following examples show how to configure different types of workloads with
+pillowfight.
 
 Run with 20 threads/instances, each doing one operation at a time:
 
@@ -244,9 +300,13 @@ Run 100 iterations of 2MB item sizes, using a dataset of 50 items
 
     cbc-pillowfight -M $(1024*1024) -m $(1024*1024) -c 100 -I 50
 
-Connect to an SSL cluster at `secure.net`:
+Use JSON documents of 100k each
 
-    cbc-pillowfight -U couchbases://secure.net/topsecret_bucket
+    cbc-pillowfight --json -m 100000 -M 100000
+
+Stress-test sub-document mutations
+
+    cbc-pillowfight --json --subdoc --set-pct 100
 
 
 ## TODO

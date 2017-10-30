@@ -31,7 +31,7 @@ extern "C" {
 
 /**
  * @ingroup lcb-public-api
- * @defgroup lcb-vbucket-api vBucket Mapping/Parsing API
+ * @defgroup lcb-vbucket-api vBucket
  * @details
  * These routines contain functionality for parsing a cluster topology configuration
  * and mapping keys to cluster nodes appropriately.
@@ -51,6 +51,8 @@ typedef enum {
     LCBVB_SVCTYPE_IXQUERY, /**< Index query */
     LCBVB_SVCTYPE_IXADMIN, /**< Index administration */
     LCBVB_SVCTYPE_N1QL, /**< N1QL Query */
+    LCBVB_SVCTYPE_FTS, /**< Fulltext */
+    LCBVB_SVCTYPE_CBAS, /**< Analytics Query */
     LCBVB_SVCTYPE__MAX
 } lcbvb_SVCTYPE;
 
@@ -73,8 +75,12 @@ typedef struct {
     lcb_U16 ixquery; /**< Indexing query port */
     lcb_U16 ixadmin; /**< Indexing admin port (HTTP) */
     lcb_U16 n1ql; /**< Query port */
+    lcb_U16 fts; /**< CBFT */
+    lcb_U16 cbas; /**< CBAS (Analytics) */
     char *views_base_; /**< Views base URL */
     char *query_base_; /**< N1QL base URL */
+    char *fts_base_;
+    char *cbas_base_;
     char *hoststrs[LCBVB_SVCTYPE__MAX];
 } lcbvb_SERVICES;
 
@@ -92,6 +98,8 @@ typedef struct {
     char *hostname; /**< Hostname for the node */
     char *viewpath; /**< Path prefix for view queries */
     char *querypath; /**< Path prefix for n1ql queries */
+    char *ftspath; /**< Path prefix for fulltext queries */
+    char *cbaspath; /**< Path prefix for analytics queries */
     unsigned nvbs; /**< Total number of vbuckets the server has assigned */
 } lcbvb_SERVER;
 
@@ -113,6 +121,17 @@ typedef enum {
     LCBVB_DIST_KETAMA = 1 /**< Ketama hashing ("memcached") bucket */
 } lcbvb_DISTMODE;
 
+typedef enum {
+    LCBVB_CAP_XATTR = 0x01,
+    LCBVB_CAP_CBHELLO = 0x02,
+    LCBVB_CAP_CCCP = 0x04,
+    LCBVB_CAP_COUCHAPI = 0x08,
+    LCBVB_CAP_DCP = 0x10,
+    LCBVB_CAP_NODES_EXT = 0x20,
+    LCBVB_CAP_TOUCH = 0x40,
+    LCBVB_CAP_XDCR_CHECKPOINTING = 0x80
+} lcbvb_BUCKET_CAPABILITIES;
+
 /**@volatile. ABI/API compatibility not guaranteed between versions.
  * @brief Structure containing the configuration.*/
 typedef struct lcbvb_CONFIG_st {
@@ -132,6 +151,7 @@ typedef struct lcbvb_CONFIG_st {
     lcbvb_VBUCKET *ffvbuckets; /* fast-forward map */
     lcbvb_CONTINUUM *continuum; /* ketama continuums */
     int *randbuf; /* Used for random server selection */
+    long caps; /**< Server capabilities */
 } lcbvb_CONFIG;
 
 
@@ -139,6 +159,7 @@ typedef struct lcbvb_CONFIG_st {
 #define LCBVB_NDATASERVERS(cfg) (cfg)->ndatasrv
 #define LCBVB_NREPLICAS(cfg) (cfg)->nrepl
 #define LCBVB_DISTTYPE(cfg) (cfg)->dtype
+#define LCBVB_CAPS(cfg) (cfg)->caps
 #define LCBVB_GET_SERVER(conf, ix) ((conf)->servers + ix)
 
 /**
@@ -265,6 +286,15 @@ lcbvb_vbreplica(lcbvb_CONFIG *cfg, int vbid, unsigned ix);
 
 
 /**
+ * uncommitted
+ * Equivalent to
+ * @code{.c}
+ * lcbvb_nmv_remap_ex(cfg, vbid, bad, 0);
+ * @endcode
+ */
+#define lcbvb_nmv_remap(cfg, vbid, bad) lcbvb_nmv_remap_ex(cfg, vbid, bad, 0)
+
+/**
  * @uncommitted
  *
  * Using various guesswork and heuristics, attempt to locate an alternate node
@@ -276,9 +306,11 @@ lcbvb_vbreplica(lcbvb_CONFIG *cfg, int vbid, unsigned ix);
  * @param bad the index known to be bad. Passing this parameter allows the
  *  handler to safely call this function and be sure that a previous call's
  *  applied heuristics will not affect the modified map.
+ * @param use_heuristics whether additional heuristics should be used. If
+ *  heuristics is off, only the fast-forward map is employed.
  */
 int
-lcbvb_nmv_remap(lcbvb_CONFIG *cfg, int vbid, int bad);
+lcbvb_nmv_remap_ex(lcbvb_CONFIG *cfg, int vbid, int bad, int use_heuristics);
 
 /**
  * @committed
@@ -550,6 +582,15 @@ LIBCOUCHBASE_API
 int
 lcbvb_genconfig(lcbvb_CONFIG *vb,
     unsigned nservers, unsigned nreplica, unsigned nvbuckets);
+
+/**
+ * @volatile
+ * Generate a fast-forward vBucket map for the configuration. This simply
+ * provides alternate indices.
+ */
+LIBCOUCHBASE_API
+void
+lcbvb_genffmap(lcbvb_CONFIG *vb);
 
 
 /**

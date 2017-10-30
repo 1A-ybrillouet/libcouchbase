@@ -23,8 +23,23 @@
 #include "settings.h"
 #include "hostlist.h"
 #ifdef __cplusplus
+namespace lcb {
+namespace io {
+struct Connstart;
+struct PoolRequest;
+class ConnectionRequest;
+}
+}
+typedef lcb::io::ConnectionRequest* lcbio_pCONNSTART;
+typedef lcb::io::ConnectionRequest lcbio_MGRREQ;
 extern "C" {
+#else
+struct lcbio_CONNSTART;
+typedef struct lcbio_CONNSTART* lcbio_pCONNSTART;
+typedef struct lcbio_MGRREQ lcbio_MGRREQ;
 #endif
+
+typedef lcbio_MGRREQ* lcbio_pMGRREQ;
 
 /**
  * @file
@@ -39,12 +54,6 @@ extern "C" {
  * @{
  */
 
-struct lcbio_CONNSTART;
-struct lcbio_MGRREQ;
-
-/** @brief Pending connection request */
-typedef struct lcbio_CONNSTART *lcbio_pCONNSTART;
-typedef struct lcbio_MGRREQ *lcbio_pMGRREQ;
 typedef struct lcbio_TABLE *lcbio_pTABLE;
 typedef struct lcbio_TIMER *lcbio_pTIMER, *lcbio_pASYNC;
 
@@ -148,7 +157,7 @@ typedef void (*lcbio_CONNDONE_cb)
 lcbio_pCONNSTART
 lcbio_connect(lcbio_pTABLE iot,
               lcb_settings *settings,
-              lcb_host_t *dest,
+              const lcb_host_t *dest,
               uint32_t timeout,
               lcbio_CONNDONE_cb handler, void *arg);
 
@@ -268,7 +277,7 @@ lcbio_protoctx_add(lcbio_SOCKET *socket, lcbio_PROTOCTX *proto);
  * @return the context, or NULL if not found
  */
 lcbio_PROTOCTX *
-lcbio_protoctx_get(lcbio_SOCKET *socket, lcbio_PROTOID id);
+lcbio_protoctx_get(const lcbio_SOCKET *socket, lcbio_PROTOID id);
 
 /**
  * Remove a protocol context by its ID

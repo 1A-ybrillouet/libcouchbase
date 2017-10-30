@@ -20,8 +20,8 @@
 #include "config.h"
 #include <gtest/gtest.h>
 #include <libcouchbase/couchbase.h>
-#include "contrib/cJSON/cJSON.h"
 #include "serverparams.h"
+#include "contrib/lcb-jsoncpp/lcb-jsoncpp.h"
 
 
 class HandleWrap
@@ -71,7 +71,11 @@ class MockCommand
     X(GET_MCPORTS) \
     X(SET_CCCP) \
     X(REGEN_VBCOORDS) \
-    X(RESET_QUERYSTATE)
+    X(RESET_QUERYSTATE) \
+    X(OPFAIL) \
+    X(START_RETRY_VERIFY) \
+    X(CHECK_RETRY_VERIFY) \
+    X(SET_ENHANCED_ERRORS)
 
 public:
     enum Code {
@@ -94,10 +98,9 @@ public:
     MockCommand(Code code);
 
     // Various methods to set a field in the payload
-    void set(const std::string &, const std::string &);
-    void set(const std::string &, int);
-    void set(const std::string, bool);
-    void set(const std::string&, cJSON *);
+    template <typename T> void set(const std::string& s, const T& v) {
+        (*payload)[s] = v;
+    }
     virtual ~MockCommand();
 
     // Encodes the command in a form suitable for sending over the network
@@ -106,8 +109,8 @@ public:
 protected:
     Code code;
     std::string name;
-    cJSON *command;
-    cJSON *payload;
+    Json::Value command;
+    Json::Value *payload;
     virtual void finalizePayload() {}
 
 private:
@@ -165,21 +168,53 @@ protected:
     std::string bucket;
 };
 
+class MockOpfailCommand : public MockCommand
+{
+public:
+    MockOpfailCommand(uint16_t errcode, int index, int count = -1,
+                      std::string bucketstr = "default")
+        : MockCommand(OPFAIL) {
+        set("count", count);
+        set("bucket", bucketstr);
+        set("code", errcode);
+
+        Json::Value srvlist(Json::arrayValue);
+        srvlist.append(index);
+        set("servers", srvlist);
+    }
+};
+
+class MockOpFailClearCommand : public MockCommand {
+public:
+    MockOpFailClearCommand(size_t nservers, std::string bucketstr = "default")
+        : MockCommand(OPFAIL) {
+        set("count", -1);
+        set("bucket", bucketstr);
+        set("code", 0);
+
+        Json::Value srvlist(Json::arrayValue);
+        for (size_t ii = 0; ii < nservers; ++ii) {
+            srvlist.append(static_cast<int>(ii));
+        }
+        set("servers", srvlist);
+    }
+};
+
 class MockResponse
 {
 public:
-    MockResponse() : jresp(NULL) {}
+    MockResponse() {}
     ~MockResponse();
     void assign(const std::string& s);
 
     bool isOk();
-
-    const cJSON *getRawResponse() {
+    const Json::Value& getRawResponse() {
         return jresp;
     }
+    const Json::Value& constResp() const { return jresp; }
 
 protected:
-    cJSON *jresp;
+    Json::Value jresp;
     friend std::ostream& operator<<(std::ostream&, const MockResponse&);
 private:
     MockResponse(const MockResponse&);
@@ -190,8 +225,11 @@ class MockEnvironment : public ::testing::Environment
 public:
     enum ServerVersion {
         VERSION_UNKNOWN = 0,
-        VERSION_10 = 1,
-        VERSION_20 = 2
+        VERSION_40 = 4,
+        VERSION_41 = 5,
+        VERSION_45 = 6,
+        VERSION_46 = 7,
+        VERSION_50 = 8
     };
 
     virtual void SetUp();
@@ -238,7 +276,7 @@ public:
      * @param index the index of the node on the mock
      * @param bucket the name of the bucket
      */
-    void failoverNode(int index, std::string bucket = "default");
+    void failoverNode(int index, std::string bucket = "default", bool rebalance = true);
 
     /**
      * Simulate node reconvering. In this case mock will enable server
@@ -277,6 +315,19 @@ public:
     void setCCCP(bool enabled,
                  std::string bucket = "",
                  const std::vector<int>* nodes = NULL);
+
+    /**
+     * Enable enhanced errors on the mock cluster
+     *
+     * This includes generation event id (ref), and setting context for some errors
+     * .
+     * @param bucket the bucket on which to enable enhanced errors
+     * @param nodes a list of by-index nodes on which to enable Enhanced Errors. If NULL
+     * then all nodes are enabled
+     */
+    void setEnhancedErrors(bool enabled,
+                           std::string bucket = "",
+                           const std::vector<int>* nodes = NULL);
 
     /**
      * Create a connection to the mock/real server.
@@ -325,7 +376,7 @@ public:
 
     static void printSkipMessage(std::string file, int line, std::string reason) {
         std::cerr << "Skipping " << file << ":" << std::dec << line;
-        std::cerr << "(" << reason << ")";
+        std::cerr << " (" << reason << ")";
         std::cerr << std::endl;
     }
 
@@ -353,6 +404,7 @@ protected:
     lcb_io_opt_st *iops;
     std::set<std::string> featureRegistry;
     std::string bucketName;
+    std::string userName;
     const char **argv;
     void clearAndReset();
 
@@ -382,5 +434,21 @@ private:
         return; \
     }
 
+#define CLUSTER_VERSION_IS_HIGHER_THAN(v)                                                                              \
+    (MockEnvironment::getInstance()->isRealCluster() && MockEnvironment::getInstance()->getServerVersion() >= v)
 
+#define SKIP_IF_CLUSTER_VERSION_IS_HIGHER_THAN(v)                                                                      \
+    if (CLUSTER_VERSION_IS_HIGHER_THAN(v)) {                                                                           \
+        MockEnvironment::printSkipMessage(__FILE__, __LINE__, "needs lower cluster version");                          \
+        return;                                                                                                        \
+    }
+
+#define CLUSTER_VERSION_IS_LOWER_THAN(v)                                                                               \
+    (MockEnvironment::getInstance()->isRealCluster() && MockEnvironment::getInstance()->getServerVersion() < v)
+
+#define SKIP_IF_CLUSTER_VERSION_IS_LOWER_THAN(v)                                                                       \
+    if (CLUSTER_VERSION_IS_LOWER_THAN(v)) {                                                                            \
+        MockEnvironment::printSkipMessage(__FILE__, __LINE__, "needs higher cluster version");                         \
+        return;                                                                                                        \
+    }
 #endif

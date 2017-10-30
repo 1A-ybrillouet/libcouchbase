@@ -2,6 +2,7 @@
 #include <libcouchbase/n1ql.h>
 #include <jsparse/parser.h>
 #include "internal.h"
+#include "auth-priv.h"
 #include "http/http.h"
 #include "logging.h"
 #include "contrib/lcb-jsoncpp/lcb-jsoncpp.h"
@@ -12,6 +13,9 @@
 #define LOGFMT "(NR=%p) "
 #define LOGID(req) static_cast<const void*>(req)
 #define LOGARGS(req, lvl) req->instance->settings, "n1ql", LCB_LOG_##lvl, __FILE__, __LINE__
+
+// Indicate that the 'creds' field is to be used.
+#define F_CMDN1QL_CREDSAUTH 1<<15
 
 class Plan {
 private:
@@ -132,12 +136,16 @@ struct lcb_N1QLCACHE_st {
         lru.clear();
         by_name.clear();
     }
+
+    ~lcb_N1QLCACHE_st() {
+        clear();
+    }
 };
 
-typedef struct lcb_N1QLREQ {
+typedef struct lcb_N1QLREQ : lcb::jsparse::Parser::Actions {
     const lcb_RESPHTTP *cur_htresp;
     struct lcb_http_request_st *htreq;
-    lcbjsp_PARSER *parser;
+    lcb::jsparse::Parser *parser;
     const void *cookie;
     lcb_N1QLCALLBACK callback;
     lcb_t instance;
@@ -152,12 +160,16 @@ typedef struct lcb_N1QLREQ {
 
     /** Request body as received from the application */
     Json::Value json;
+    const Json::Value& json_const() const { return json; }
 
     /** String of the original statement. Cached here to avoid jsoncpp lookups */
     std::string statement;
 
     /** Whether we're retrying this */
     bool was_retried;
+
+    /** Is this query to Analytics (CBAS) service */
+    bool is_cbas;
 
     lcb_N1QLCACHE& cache() { return *instance->n1ql_cache; }
 
@@ -197,6 +209,11 @@ typedef struct lcb_N1QLREQ {
     inline bool maybe_retry();
 
     /**
+     * Returns true if payload matches retry conditions.
+     */
+    inline bool has_retriable_error(const Json::Value& root);
+
+    /**
      * Did the application request this query to use prepared statements
      * @return true if using prepared statements
      */
@@ -220,6 +237,21 @@ typedef struct lcb_N1QLREQ {
 
     inline lcb_N1QLREQ(lcb_t obj, const void *user_cookie, const lcb_CMDN1QL *cmd);
     inline ~lcb_N1QLREQ();
+
+    // Parser overrides:
+    void JSPARSE_on_row(const lcb::jsparse::Row& row) {
+        lcb_RESPN1QL resp = { 0 };
+        resp.row = static_cast<const char *>(row.row.iov_base);
+        resp.nrow = row.row.iov_len;
+        nrows++;
+        invoke_row(&resp, false);
+    }
+    void JSPARSE_on_error(const std::string&) {
+        lasterr = LCB_PROTOCOL_ERROR;
+    }
+    void JSPARSE_on_complete(const std::string&) {
+        // Nothing
+    }
 
 } N1QLREQ;
 
@@ -260,11 +292,15 @@ lcb_n1qlcache_getplan(lcb_N1QLCACHE *cache,
     }
 }
 
-#define WTF_MAGIC_STRING \
-    "index deleted or node hosting the index is down - cause: queryport.indexNotFound"
 
-static bool
-has_retriable_error(const Json::Value& root)
+static const char *wtf_magic_strings[] = {
+        "index deleted or node hosting the index is down - cause: queryport.indexNotFound",
+        "Index Not Found - cause: queryport.indexNotFound",
+        NULL
+};
+
+bool
+N1QLREQ::has_retriable_error(const Json::Value& root)
 {
     if (!root.isObject()) {
         return false;
@@ -279,13 +315,24 @@ has_retriable_error(const Json::Value& root)
         if (!cur.isObject()) {
             continue; // eh?
         }
-        std::string msg = cur["msg"].asString();
-        unsigned code = cur["code"].asUInt();
-        if (code == 4050 || code == 4070) {
-            return true;
+        const Json::Value& jmsg = cur["msg"];
+        const Json::Value& jcode = cur["code"];
+        unsigned code = 0;
+        if (jcode.isNumeric()) {
+            code = jcode.asUInt();
+            if (code == 4050 || code == 4070) {
+                lcb_log(LOGARGS(this, TRACE), LOGFMT "Will retry request. code: %d", LOGID(this), code);
+                return true;
+            }
         }
-        if (msg.find(WTF_MAGIC_STRING) != std::string::npos) {
-            return true;
+        if (jmsg.isString()) {
+            const char *jmstr = jmsg.asCString();
+            for (const char **curs = wtf_magic_strings; *curs; curs++) {
+                if (!strstr(jmstr, *curs)) {
+                    lcb_log(LOGARGS(this, TRACE), LOGFMT "Will retry request. code: %d, msg: %s", LOGID(this), code, jmstr);
+                    return true;
+                }
+            }
         }
     }
     return false;
@@ -318,8 +365,7 @@ N1QLREQ::maybe_retry()
     }
 
     was_retried = true;
-
-    lcbjsp_get_postmortem(parser, &meta);
+    parser->get_postmortem(meta);
     if (!parse_json(static_cast<const char*>(meta.iov_base), meta.iov_len, root)) {
         return false; // Not JSON
     }
@@ -332,16 +378,15 @@ N1QLREQ::maybe_retry()
     // Let's see if we can actually retry. First remove the existing prepared
     // entry:
     cache().remove_entry(statement);
-    lcb_error_t rc = request_plan();
-    if (rc != LCB_SUCCESS) {
-        lasterr = rc;
-        return false;
 
-    } else {
+    if ((lasterr = request_plan()) == LCB_SUCCESS) {
         // We'll be parsing more rows later on..
-        lcbjsp_reset(parser);
+        delete parser;
+        parser = new lcb::jsparse::Parser(lcb::jsparse::Parser::MODE_N1QL, this);
+        return true;
     }
-    return true;
+
+    return false;
 }
 
 void
@@ -354,7 +399,7 @@ N1QLREQ::invoke_row(lcb_RESPN1QL *resp, bool is_last)
         lcb_IOV meta;
         resp->rflags |= LCB_RESP_F_FINAL;
         resp->rc = lasterr;
-        lcbjsp_get_postmortem(parser, &meta);
+        parser->get_postmortem(meta);
         resp->row = static_cast<const char*>(meta.iov_base);
         resp->nrow = meta.iov_len;
     }
@@ -380,28 +425,10 @@ lcb_N1QLREQ::~lcb_N1QLREQ()
     }
 
     if (parser) {
-        lcbjsp_free(parser);
+        delete parser;
     }
     if (prepare_req) {
         lcb_n1ql_cancel(instance, prepare_req);
-    }
-}
-
-static void
-row_callback(lcbjsp_PARSER *parser, const lcbjsp_ROW *datum)
-{
-    N1QLREQ *req = static_cast<N1QLREQ*>(parser->data);
-    lcb_RESPN1QL resp = { 0 };
-
-    if (datum->type == LCBJSP_TYPE_ROW) {
-        resp.row = static_cast<const char*>(datum->row.iov_base);
-        resp.nrow = datum->row.iov_len;
-        req->nrows++;
-        req->invoke_row(&resp, 0);
-    } else if (datum->type == LCBJSP_TYPE_ERROR) {
-        req->lasterr = resp.rc = LCB_PROTOCOL_ERROR;
-    } else if (datum->type == LCBJSP_TYPE_COMPLETE) {
-        /* Nothing */
     }
 }
 
@@ -432,11 +459,8 @@ chunk_callback(lcb_t instance, int ign, const lcb_RESPBASE *rb)
         delete req;
         return;
     }
-
-    lcbjsp_feed(req->parser, static_cast<const char*>(rh->body), rh->nbody);
+    req->parser->feed(static_cast<const char*>(rh->body), rh->nbody);
 }
-
-#define QUERY_PATH "/query/service"
 
 void
 N1QLREQ::fail_prepared(const lcb_RESPN1QL *orig, lcb_error_t err)
@@ -500,13 +524,23 @@ N1QLREQ::issue_htreq(const std::string& body)
 
     htcmd.content_type = "application/json";
     htcmd.method = LCB_HTTP_METHOD_POST;
-    htcmd.type = LCB_HTTP_TYPE_N1QL;
-    htcmd.cmdflags = LCB_CMDHTTP_F_STREAM;
+
+    if (is_cbas) {
+        htcmd.type = LCB_HTTP_TYPE_CBAS;
+    } else {
+        htcmd.type = LCB_HTTP_TYPE_N1QL;
+    }
+
+    htcmd.cmdflags = LCB_CMDHTTP_F_STREAM|LCB_CMDHTTP_F_CASTMO;
+    if (flags & F_CMDN1QL_CREDSAUTH) {
+        htcmd.cmdflags |= LCB_CMDHTTP_F_NOUPASS;
+    }
     htcmd.reqhandle = &htreq;
+    htcmd.cas = timeout;
 
     lcb_error_t rc = lcb_http3(instance, this, &htcmd);
     if (rc == LCB_SUCCESS) {
-        lcb_htreq_setcb(htreq, chunk_callback);
+        htreq->set_callback(chunk_callback);
     }
     return rc;
 }
@@ -521,6 +555,9 @@ N1QLREQ::request_plan()
     newcmd.cmdflags = LCB_CMDN1QL_F_JSONQUERY;
     newcmd.handle = &prepare_req;
     newcmd.query = reinterpret_cast<const char*>(&newbody);
+    if (flags & F_CMDN1QL_CREDSAUTH) {
+        newcmd.cmdflags |= LCB_CMD_F_MULTIAUTH;
+    }
 
     return lcb_n1ql_query(instance, this, &newcmd);
 }
@@ -567,13 +604,12 @@ lcb_n1qlreq_parsetmo(const std::string& s)
 
 lcb_N1QLREQ::lcb_N1QLREQ(lcb_t obj,
     const void *user_cookie, const lcb_CMDN1QL *cmd)
-    : cur_htresp(NULL), htreq(NULL), parser(lcbjsp_create(LCBJSP_MODE_N1QL)),
+    : cur_htresp(NULL), htreq(NULL),
+      parser(new lcb::jsparse::Parser(lcb::jsparse::Parser::MODE_N1QL, this)),
       cookie(user_cookie), callback(cmd->callback), instance(obj),
       lasterr(LCB_SUCCESS), flags(cmd->cmdflags), timeout(0),
-      nrows(0), prepare_req(NULL), was_retried(false)
+      nrows(0), prepare_req(NULL), was_retried(false), is_cbas(false)
 {
-    parser->data = this;
-    parser->callback = row_callback;
     if (cmd->handle) {
         *cmd->handle = this;
     }
@@ -585,9 +621,20 @@ lcb_N1QLREQ::lcb_N1QLREQ(lcb_t obj,
         return;
     }
 
-    statement = json["statement"].asString();
-    if (statement.empty()) {
-        json.removeMember("statement");
+    if (flags & LCB_CMDN1QL_F_CBASQUERY) {
+        is_cbas = true;
+    }
+    if (is_cbas && (flags & LCB_CMDN1QL_F_PREPCACHE)) {
+        lasterr = LCB_OPTIONS_CONFLICT;
+        return;
+    }
+
+    const Json::Value& j_statement = json_const()["statement"];
+    if (j_statement.isString()) {
+        statement = j_statement.asString();
+    } else if (!j_statement.isNull()) {
+        lasterr = LCB_EINVAL;
+        return;
     }
 
     Json::Value& tmoval = json["timeout"];
@@ -598,8 +645,35 @@ lcb_N1QLREQ::lcb_N1QLREQ(lcb_t obj,
         sprintf(buf, "%uus", LCBT_SETTING(obj, n1ql_timeout));
         tmoval = buf;
         timeout = LCBT_SETTING(obj, n1ql_timeout);
-    } else {
+    } else if (tmoval.isString()) {
         timeout = lcb_n1qlreq_parsetmo(tmoval.asString());
+    } else {
+        // Timeout is not a string!
+        lasterr = LCB_EINVAL;
+        return;
+    }
+
+    // Determine if we need to add more credentials.
+    // Because N1QL multi-bucket auth will not work on server versions < 4.5
+    // using JSON encoding, we need to only use the multi-bucket auth feature
+    // if there are actually multiple credentials to employ.
+    const lcb::Authenticator& auth = *instance->settings->auth;
+    if (auth.buckets().size() > 1 && (cmd->cmdflags & LCB_CMD_F_MULTIAUTH)) {
+        flags |= F_CMDN1QL_CREDSAUTH;
+        Json::Value& creds = json["creds"];
+        lcb::Authenticator::Map::const_iterator ii = auth.buckets().begin();
+        if (! (creds.isNull() || creds.isArray())) {
+            lasterr = LCB_EINVAL;
+            return;
+        }
+        for (; ii != auth.buckets().end(); ++ii) {
+            if (ii->second.empty()) {
+                continue;
+            }
+            Json::Value& curCreds = creds.append(Json::Value(Json::objectValue));
+            curCreds["user"] = ii->first;
+            curCreds["pass"] = ii->second;
+        }
     }
 }
 
@@ -664,6 +738,15 @@ LIBCOUCHBASE_API
 void
 lcb_n1ql_cancel(lcb_t instance, lcb_N1QLHANDLE handle)
 {
+    // Note that this function is just an elaborate way to nullify the
+    // callback. We are very particular about _not_ cancelling the underlying
+    // http request, because the handle's deletion is controlled
+    // from the HTTP callback, which checks if the callback is NULL before
+    // deleting.
+    // at worst, deferring deletion to the http response might cost a few
+    // extra network reads; whereas this function itself is intended as a
+    // bailout for unexpected destruction.
+
     if (handle->prepare_req) {
         lcb_n1ql_cancel(instance, handle->prepare_req);
         handle->prepare_req = NULL;

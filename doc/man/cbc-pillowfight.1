@@ -1,7 +1,7 @@
 .\" generated with Ronn/v0.7.3
 .\" http://github.com/rtomayko/ronn/tree/0.7.3
 .
-.TH "CBC\-PILLOWFIGHT" "1" "April 2015" "" ""
+.TH "CBC\-PILLOWFIGHT" "1" "September 2017" "" ""
 .
 .SH "NAME"
 \fBcbc\-pillowfight\fR \- Stress Test for Couchbase Client and Cluster
@@ -74,6 +74,10 @@ The percentage of operations which should be mutations\. A value of 100 means on
 By default \fBcbc\-pillowfight\fR will load all the items (see \fB\-\-num\-items\fR) into the cluster and then begin performing the normal workload\. Specifying this option bypasses this stage\. Useful if the items have already been loaded in a previous run\.
 .
 .TP
+\fB\-\-populate\-only\fR
+Stop after population\. Useful to populate buckets with large amounts of data\.
+.
+.TP
 \fB\-m\fR, \fB\-\-min\-size\fR=\fIMINSIZE\fR:
 
 .
@@ -101,8 +105,9 @@ This specifies the starting offset for the items\. The items by default are gene
 \fB\-T\fR, \fB\-\-timings\fR
 Dump a histogram of command timings and latencies to the screen every second\.
 .
-.P
-The following options control how \fBcbc\-pillowfight\fR connects to the cluster
+.TP
+\fB\-e\fR, \fB\-\-expiry\fR=\fISECONDS\fR
+Set the expiration time on the document for \fISECONDS\fR when performing each operation\. Note that setting this too low may cause not\-found errors to appear on the screen\.
 .
 .TP
 \fB\-U\fR, \fB\-\-spec\fR=\fISPEC\fR
@@ -110,10 +115,6 @@ A string describing the cluster to connect to\. The string is in a URI\-like syn
 .
 .IP
 The default for this option is \fBcouchbase://localhost/default\fR
-.
-.TP
-\fB\-u\fR, \fB\-\-username\fR=\fIUSERNAME\fR
-Specify the \fIusername\fR for the bucket\. As of Couchbase Server 2\.5 this field should be either left empty or set to the name of the bucket itself\.
 .
 .TP
 \fB\-P\fR, \fB\-\-password\fR=\fISASLPASS\fR:
@@ -137,6 +138,47 @@ Specify more information to standard error about what the client is doing\. You 
 .TP
 \fB\-D\fR, \fB\-\-cparam\fR=OPTION=VALUE
 Provide additional client options\. Acceptable options can also be placed in the connection string, however this option is provided as a convenience\. This option may be specified multiple times, each time specifying a key=value pair (for example, \fB\-Doperation_timeout=10 \-Dconfig_cache=/foo/bar/baz\fR)\. See \fIADDITIONAL OPTIONS\fR for more information
+.
+.TP
+\fB\-\-json\fR
+Make \fBpillowfight\fR store document as JSON rather than binary\. This will allow the documents to nominally be analyzed by other Couchbase services such as Query and MapReduce\.
+.
+.IP
+JSON documents are created by creating an empty JSON object (\fB{}\fR) and then repeated populating it with \fBField_%d\fR property names (where \fB%d\fR is \fB1\fR and higher), and setting its value to a repeating asterisk \fB*\fR up to 16 times:
+.
+.IP "" 4
+.
+.nf
+
+  {
+      "Field_1": "****************",
+      "Field_2": "****************",
+      "Field_3": "****************",
+      "Field_4": "****************",
+      "Field_5": "********"
+  }
+.
+.fi
+.
+.IP "" 0
+.
+.IP
+When using document size constraints, be aware that the minimum and maximum sizes (\fB\-\-min\-size\fR and \fB\-\-max\-size\fR) are not strict limits, and that the resultant sizes may be bigger or smaller by a few bytes in order to satisfy the requirements of proper JSON syntax\.
+.
+.TP
+\fB\-\-noop\fR
+Use couchbase NOOP operations when running the workload\. This mode ignores population, and all other document operations\. Useful as the most lightweight workload\.
+.
+.TP
+\fB\-\-subdoc\fR
+Use couchbase sub\-document operations when running the workload\. In this mode \fBpillowfight\fR will use Couchbase sub\-document operations \fIhttp://blog\.couchbase\.com/2016/february/subdoc\-explained\fR to perform gets and sets of data\. This option must be used with \fB\-\-json\fR
+.
+.TP
+\fB\-\-pathcount\fR
+Specify the number of paths a single sub\-document operation should contain\. By default, each subdoc operation operates on only a single path within the document\. You can specify multiple paths to atomically executed multiple subdoc operations within a single command\.
+.
+.IP
+This option does not affect the \fB\-\-batch\-size\fR option as a subdoc command is considered as a single command (with respect to batching) regardless of how many operations it contains\.
 .
 .P
  \fI\fR
@@ -171,6 +213,9 @@ Specify the bootstrap protocol the client should use when attempting to connect 
 .SH "EXAMPLES"
 .
 .SS "CONNECTION EXAMPLES"
+The following examples show how to connect \fBpillowfight\fR to different types of cluster configurations\.
+.
+.P
 Run against a bucket (\fBa_bucket\fR) on a cluster on a remote host:
 .
 .IP "" 4
@@ -218,7 +263,7 @@ Connect to a password protected bucket (\fBprotected\fR) on a remote host:
 
 cbc cat key \-U couchbase://remote\.host\.net/protected \-P \-
 Bucket password:
-\.\.\.
+\[char46]\[char46]\[char46]
 .
 .fi
 .
@@ -276,7 +321,20 @@ cbc cat key \-U memcached://host1,host2,host3,host4
 .
 .IP "" 0
 .
-.SS "BENCHMARK EXAMPLES"
+.P
+Connect to an SSL cluster at \fBsecure\.net\fR:
+.
+.IP "" 4
+.
+.nf
+
+cbc\-pillowfight \-U couchbases://secure\.net/topsecret_bucket
+.
+.fi
+.
+.IP "" 0
+.
+.P
 Run against a bucket (\fBa_bucket\fR) on a cluster on a remote host:
 .
 .IP "" 4
@@ -288,6 +346,9 @@ cbc\-pillowfight \-U couchbase://192\.168\.33\.101/a_bucket
 .fi
 .
 .IP "" 0
+.
+.SS "BENCHMARK EXAMPLES"
+The following examples show how to configure different types of workloads with pillowfight\.
 .
 .P
 Run with 20 threads/instances, each doing one operation at a time:
@@ -316,13 +377,26 @@ cbc\-pillowfight \-M $(1024*1024) \-m $(1024*1024) \-c 100 \-I 50
 .IP "" 0
 .
 .P
-Connect to an SSL cluster at \fBsecure\.net\fR:
+Use JSON documents of 100k each
 .
 .IP "" 4
 .
 .nf
 
-cbc\-pillowfight \-U couchbases://secure\.net/topsecret_bucket
+cbc\-pillowfight \-\-json \-m 100000 \-M 100000
+.
+.fi
+.
+.IP "" 0
+.
+.P
+Stress\-test sub\-document mutations
+.
+.IP "" 4
+.
+.nf
+
+cbc\-pillowfight \-\-json \-\-subdoc \-\-set\-pct 100
 .
 .fi
 .

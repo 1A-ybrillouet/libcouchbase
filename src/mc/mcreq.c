@@ -66,13 +66,17 @@ mcreq_reserve_key(
                contig->bytes,
                contig->nbytes);
 
-    } else {
+    } else if (kreq->type == LCB_KV_CONTIG) {
         /**
          * Don't do any copying.
          * Assume the key buffer has enough space for the packet as well.
          */
         CREATE_STANDALONE_SPAN(&packet->kh_span, contig->bytes, contig->nbytes);
         packet->flags |= MCREQ_F_KEY_NOCOPY;
+
+    } else {
+        /** IOVs not supported for keys */
+        return LCB_EINVAL;
     }
 
     return LCB_SUCCESS;
@@ -121,8 +125,8 @@ mcreq_reserve_value(
         CREATE_STANDALONE_SPAN(vspan, contig->bytes, contig->nbytes);
         packet->flags |= MCREQ_F_VALUE_NOCOPY;
 
-    } else {
-        /** Multiple spans! */
+    } else if (vreq->vtype == LCB_KV_IOV) {
+        /** Multiple spans, no copy */
         unsigned int ii;
         const lcb_FRAGBUF *msrc = &vreq->u_buf.multi;
         lcb_FRAGBUF *mdst = &packet->u_value.multi;
@@ -135,6 +139,30 @@ mcreq_reserve_value(
         for (ii = 0; ii < mdst->niov; ii++) {
             mdst->iov[ii] = msrc->iov[ii];
             mdst->total_length += mdst->iov[ii].iov_len;
+        }
+    } else if (vreq->vtype == LCB_KV_IOVCOPY) {
+        /** Multiple input buffers, normal copying output buffer */
+        unsigned int ii, cur_offset;
+        const lcb_FRAGBUF *msrc = &vreq->u_buf.multi;
+
+        if (msrc->total_length) {
+            vspan->size = msrc->total_length;
+        } else {
+            vspan->size = 0;
+            for (ii = 0; ii < msrc->niov; ii++) {
+                vspan->size += msrc->iov[ii].iov_len;
+            }
+        }
+
+        rv = netbuf_mblock_reserve(&pipeline->nbmgr, vspan);
+        if (rv != 0) {
+            return LCB_CLIENT_ENOMEM;
+        }
+
+        for (ii = 0, cur_offset = 0; ii < msrc->niov; ii++) {
+            char *buf = SPAN_BUFFER(vspan) + cur_offset;
+            memcpy(buf, msrc->iov[ii].iov_base, msrc->iov[ii].iov_len);
+            cur_offset += msrc->iov[ii].iov_len;
         }
     }
 
@@ -338,6 +366,8 @@ mcreq_renew_packet(const mc_PACKET *src)
                 assert(vdata == inflated);
 
                 if (rv != 0) {
+                    /* TODO: log error details when snappy will be enabled */
+                    free(edst);
                     return NULL;
                 }
                 nvdata = n_inflated;
@@ -437,6 +467,9 @@ mcreq_basic_packet(
     if (!queue->config) {
         return LCB_CLIENT_ETMPFAIL;
     }
+    if (!cmd) {
+        return LCB_EINVAL;
+    }
 
     mcreq_map_key(queue, &cmd->key, &cmd->_hashkey,
         sizeof(*req) + extlen, &vb, &srvix);
@@ -452,6 +485,9 @@ mcreq_basic_packet(
     }
 
     *packet = mcreq_allocate_packet(*pipeline);
+    if (*packet == NULL) {
+        return LCB_CLIENT_ENOMEM;
+    }
 
     mcreq_reserve_key(*pipeline, *packet, sizeof(*req) + extlen, &cmd->key);
 
@@ -519,6 +555,15 @@ int
 mcreq_pipeline_init(mc_PIPELINE *pipeline)
 {
     nb_SETTINGS settings;
+
+    /* Initialize all members to 0 */
+    memset(&pipeline->requests, 0, sizeof pipeline->requests);
+    pipeline->parent = NULL;
+    pipeline->flush_start = NULL;
+    pipeline->index = 0;
+    memset(&pipeline->ctxqueued, 0, sizeof pipeline->ctxqueued);
+    pipeline->buf_done_callback = NULL;
+
     netbuf_default_settings(&settings);
 
     /** Initialize datapool */
@@ -526,7 +571,8 @@ mcreq_pipeline_init(mc_PIPELINE *pipeline)
 
     /** Initialize request pool */
     settings.data_basealloc = sizeof(mc_PACKET) * 32;
-    netbuf_init(&pipeline->reqpool, &settings);
+    netbuf_init(&pipeline->reqpool, &settings);;
+    pipeline->metrics = NULL;
     return 0;
 }
 
@@ -597,7 +643,7 @@ mcreq_queue_cleanup(mc_CMDQUEUE *queue)
 void
 mcreq_sched_enter(mc_CMDQUEUE *queue)
 {
-    (void)queue;
+    queue->ctxenter = 1;
 }
 
 
@@ -606,6 +652,11 @@ static void
 queuectx_leave(mc_CMDQUEUE *queue, int success, int flush)
 {
     unsigned ii;
+
+    if (queue->ctxenter) {
+        queue->ctxenter = 0;
+    }
+
     for (ii = 0; ii < queue->_npipelines_ex; ii++) {
         mc_PIPELINE *pipeline;
         sllist_node *ll_next, *ll;
@@ -882,7 +933,7 @@ mcreq_dump_packet(const mc_PACKET *packet, FILE *fp, mcreq_payload_dump_fn dumpf
                 fprintf(fp, "%sValue is user allocated\n", indent);
             }
             fprintf(fp, "%sValue: %p, %u bytes\n", indent,
-                SPAN_BUFFER(&packet->u_value.single), packet->u_value.single.size);
+                (void *)SPAN_BUFFER(&packet->u_value.single), packet->u_value.single.size);
         }
     }
 

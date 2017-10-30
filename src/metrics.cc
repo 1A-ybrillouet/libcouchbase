@@ -68,6 +68,7 @@ public:
         entries.push_back(ent);
         raw_entries.push_back(ent);
         nservers = entries.size();
+        servers = (const lcb_SERVERMETRICS**) &raw_entries[0];
         return ent;
     }
 
@@ -120,4 +121,12 @@ lcb_metrics_dumpserver(const lcb_SERVERMETRICS *metrics, FILE *fp)
     fprintf(fp, "Packets timeout: %lu\n", metrics->packets_timeout);
     fprintf(fp, "Packets orphaned: %lu", metrics->packets_ownerless);
 }
+
+void
+lcb_metrics_reset_pipeline_gauges(lcb_SERVERMETRICS *metrics)
+{
+    metrics->packets_queued = 0;
+    metrics->bytes_queued = 0;
+}
+
 }

@@ -73,6 +73,7 @@ ConnParams::ConnParams() :
     o_saslmech.description("Force SASL mechanism").argdesc("PLAIN|CRAM_MD5");
     o_timings.description("Enable command timings");
     o_timeout.description("Operation timeout");
+    o_timeout.hide();
     o_transport.description("Bootstrap protocol").argdesc("HTTP|CCCP|ALL").setDefault("ALL");
     o_configcache.description("Path to cached configuration");
     o_ssl.description("Enable SSL settings").argdesc("ON|OFF|NOVERIFY").setDefault("off");
@@ -80,7 +81,8 @@ ConnParams::ConnParams() :
     o_verbose.description("Set debugging output (specify multiple times for greater verbosity");
     o_dump.description("Dump verbose internal state after operations are done");
 
-    o_cparams.description("Additional options for connection");
+    o_cparams.description("Additional options for connection. "
+        "Use -Dtimeout=SECONDS for KV operation timeout");
     o_cparams.argdesc("OPTION=VALUE");
 
     // Hide some more exotic options
@@ -113,12 +115,34 @@ ConnParams::addToParser(Parser& parser)
         newmsg += getConfigfileName();
         newmsg += "`. ";
         newmsg += errmsg;
-        throw (newmsg);
+        throw BadArg(newmsg);
     }
 
     #define X(tp, varname, longname, shortname) parser.addOption(o_##varname);
     X_OPTIONS(X)
     #undef X
+}
+
+string
+ConnParams::getUserHome()
+{
+    string ret;
+#if _WIN32
+    const char *v = getenv("APPDATA");
+    if (v) {
+        ret = v;
+        ret += "\\";
+        ret += CBC_WIN32_APPDIR;
+        ret += "\\";
+    }
+#else
+    const char *home = getenv("HOME");
+    if (home) {
+        ret = home;
+        ret += "/";
+    }
+#endif
+    return ret;
 }
 
 string
@@ -129,25 +153,7 @@ ConnParams::getConfigfileName()
         return override;
     }
 
-    string ret;
-#if _WIN32
-    const char *v = getenv("APPDATA");
-    if (v) {
-        ret = v;
-        ret += "\\";
-        ret += CBC_WIN32_APPDIR;
-        ret += "\\";
-        ret += CBC_CONFIG_FILENAME;
-    }
-#else
-    const char *home = getenv("HOME");
-    if (home) {
-        ret = home;
-        ret += "/";
-    }
-    ret += CBC_CONFIG_FILENAME;
-#endif
-    return ret;
+    return getUserHome() + CBC_CONFIG_FILENAME;
 }
 
 static void
@@ -182,7 +188,7 @@ ConnParams::loadFileDefaults()
 
         pos = curline.find('=');
         if (pos == string::npos || pos == curline.size()-1) {
-            throw "Configuration file must be formatted as key-value pairs";
+            throw BadArg("Configuration file must be formatted as key-value pairs. Check " + getConfigfileName());
         }
 
         key = curline.substr(0, pos);
@@ -190,7 +196,7 @@ ConnParams::loadFileDefaults()
         stripWhitespacePadding(key);
         stripWhitespacePadding(value);
         if (key.empty() || value.empty()) {
-            throw "Key and value cannot be empty";
+            throw BadArg("Key and value cannot be empty. Check " + getConfigfileName());
         }
 
         if (key == "uri") {
@@ -205,7 +211,7 @@ ConnParams::loadFileDefaults()
         } else if (key == "timeout") {
             unsigned ival = 0;
             if (!sscanf(value.c_str(), "%u", &ival)) {
-                throw "Invalid formatting for timeout";
+                throw BadArg("Invalid formatting for timeout. Check " + getConfigfileName());
             }
             o_timeout.setDefault(ival).setPassed();
         } else if (key == "connstr") {
@@ -215,7 +221,7 @@ ConnParams::loadFileDefaults()
         } else if (key == "ssl") {
             o_ssl.setDefault(value).setPassed();
         } else {
-            throw string("Unrecognized key: ") + key;
+            throw BadArg(string("Unrecognized key: ") + key + ". Check " + getConfigfileName());
         }
     }
     return true;
@@ -239,7 +245,7 @@ ConnParams::writeConfig(const string& s)
         f.exceptions(std::ios::failbit|std::ios::badbit);
         f.open(s.c_str());
     } catch (std::exception& ex) {
-        throw string("Couldn't open " + s + " " + ex.what());
+        throw std::runtime_error("Couldn't open " + s + " " + ex.what());
     }
 
     time_t now = time(NULL);
@@ -273,7 +279,7 @@ ConnParams::fillCropts(lcb_create_st& cropts)
 
     if (o_connstr.passed()) {
         if (o_host.passed() || o_bucket.passed()) {
-            throw string("Use of the deprecated "
+            throw BadArg("Use of the deprecated "
                 "-h/--host or -b/--bucket options with -U is "
                 "not allowed!");
         }
@@ -329,6 +335,8 @@ ConnParams::fillCropts(lcb_create_st& cropts)
         connstr += '&';
     }
     if (o_timeout.passed()) {
+        std::cerr << "Warning: --timeout option is deprecated. Use -Dtimeout=SECONDS" << std::endl;
+        std::cerr << "         --timeout will be interpreted as SECONDS" << std::endl;
         connstr += "operation_timeout=";
         std::stringstream ss;
         ss << std::dec << o_timeout.result();
@@ -380,7 +388,7 @@ void doPctl(lcb_t instance, int cmd, T arg)
     lcb_error_t err;
     err = lcb_cntl(instance, LCB_CNTL_SET, cmd, (void*)arg);
     if (err != LCB_SUCCESS) {
-        throw err;
+        throw LcbError(err);
     }
 }
 
@@ -395,7 +403,7 @@ void doStringCtl(lcb_t instance, const char *s, const char *val)
     lcb_error_t err;
     err = lcb_cntl_string(instance, s, val);
     if (err != LCB_SUCCESS) {
-        throw err;
+        throw LcbError(err);
     }
 }
 
